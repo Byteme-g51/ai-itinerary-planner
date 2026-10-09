@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 
 import { fetchMarketplacePackage, type MarketplacePackageDetail, type MarketplaceReview } from "../lib/marketplace-api";
 import { supabase } from "../lib/supabase/client";
-import { formatTripLength, initials, planItineraryPhotos } from "../lib/marketplace-detail";
+import { formatTripLength, initials, mosaicLayout, planItineraryPhotos } from "../lib/marketplace-detail";
 import { buildDaysFromPackage, type TimelineItem } from "../lib/itinerary-builder";
 import { dateAfter, pickFlightLegs } from "../lib/booking-options";
 import { packageVibeLabels } from "../lib/vibes";
@@ -352,8 +352,9 @@ function StopIcon({ name, size = 20, stroke = color.textPrimary }: { name: Timel
 }
 
 // Up to 6 photos per stop. One photo shows as a single landscape tile; more
-// than one shows as a mosaic (one large + up to two small), with a "+N"
-// overlay when there are more than fit. Every tile opens the lightbox.
+// than one shows as a mosaic (see mosaicLayout: two equal tiles, or one large
+// + two small), with a "+N" overlay when there are more than fit. Every tile
+// opens the lightbox.
 function StopPhotoGrid({ images, onOpen }: { images: string[]; onOpen: (images: string[], index: number) => void }) {
   const shown = images.slice(0, 6);
   if (shown.length === 0) return null;
@@ -370,14 +371,15 @@ function StopPhotoGrid({ images, onOpen }: { images: string[]; onOpen: (images: 
 
   const visible = shown.slice(0, 3);
   const extra = shown.length - visible.length;
+  const layout = mosaicLayout(shown.length);
   return (
-    <div style={{ width: 320, height: 200, flexShrink: 0, display: "grid", gridTemplateColumns: "1.4fr 1fr", gridTemplateRows: "1fr 1fr", gap: 2, borderRadius: radius.sm, overflow: "hidden" }}>
+    <div style={{ width: 320, height: 200, flexShrink: 0, display: "grid", gridTemplateColumns: layout.columns, gridTemplateRows: "1fr 1fr", gap: 2, borderRadius: radius.sm, overflow: "hidden" }}>
       {visible.map((src, i) => (
         <button
           key={i}
           type="button"
           onClick={() => onOpen(shown, i)}
-          style={{ ...tileButtonStyle, gridColumn: i === 0 ? "1" : "2", gridRow: i === 0 ? "1 / 3" : i === 1 ? "1" : "2" }}
+          style={{ ...tileButtonStyle, gridColumn: layout.tiles[i].column, gridRow: layout.tiles[i].row }}
         >
           <img src={src} alt="Example photo" style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover" }} />
           {i === visible.length - 1 && extra > 0 && (
