@@ -26,7 +26,7 @@ Define the data contract that turns AI wizard selections into a persisted travel
 | `price_aud` (int) | `price_aud` (float) | `Math.round`, null when not finite |
 | `hotel_name`, `city`, `room_type` | same names | passthrough |
 | `check_in_date` / `check_out_date` (date) | `check_in` / `check_out` (string) | `.slice(0, 10)` |
-| `star_rating` (int 1–5) | `star_rating` (float) | round, then clamp to 1–5; null when absent |
+| `star_rating` (number 1–5) | `star_rating` (float) | round, then clamp to 1–5 (decimals are also accepted); null when absent |
 | `price_per_night_aud` (int) | `price_per_night_aud` (float) | `Math.round` |
 | `activity_name` | `days[].activities[].activity_name` | passthrough |
 | `activity_date` (required) | none on the activity — the parent `days[].date` | lift from the parent day, `.slice(0, 10)` |
