@@ -40,7 +40,7 @@ info:
     Error responses use `ErrorResponse`, except user-management upstream failures, which return an `error` string.
     All monetary values are stored and returned as **whole AUD dollars** (integer), matching the database columns.
 
-  version: "2.8.0"
+  version: "2.9.0"
   license:
     name: Proprietary, all rights reserved
 
@@ -876,11 +876,11 @@ components:
           type: string
           example: "The Layar Private Villas"
         star_rating:
-          type: integer
+          type: number
           minimum: 1
           maximum: 5
           nullable: true
-          example: 5
+          example: 4.9
         city:
           type: string
           example: "Seminyak, Bali"

@@ -70,7 +70,8 @@ class FlightInput(BaseModel):
 
 class HotelInput(BaseModel):
     hotel_name: str
-    star_rating: int | None = Field(default=None, ge=1, le=5)
+    # Catalog hotels are rated like 4.9 (hotels.star_rating is FLOAT8).
+    star_rating: float | None = Field(default=None, ge=1, le=5)
     city: str
     address: str | None = None
     check_in_date: date | None = None
