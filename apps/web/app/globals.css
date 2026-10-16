@@ -1937,8 +1937,8 @@ figure .remove-photo-btn:focus-visible { outline: 2px solid var(--fc-focus-ring)
 .creator-preview-bar__back { min-height: 44px; padding: 0 16px; display: inline-flex; align-items: center; gap: 8px; border: 1px solid var(--fc-border); border-radius: 999px; background: var(--fc-white); color: var(--fc-ink); font: 600 14px/20px var(--fc-font-body); cursor: pointer; transition: background 140ms ease-out; }
 .creator-preview-bar__back:hover { background: var(--fc-surface-subtle); }
 .creator-preview-bar__back:focus-visible { outline: 3px solid var(--fc-focus-ring); outline-offset: 2px; }
-.creator-preview-bar .creator-preview-notice { margin: 0; padding: 8px 14px; flex: 1 1 280px; }
-.creator-preview-notice { margin-bottom: 20px; padding: 14px 16px; display: grid; gap: 3px; border: 1px solid var(--fc-border); border-radius: 12px; background: var(--fc-surface-subtle); }
+.creator-preview-bar .creator-preview-notice { flex: 1 1 280px; }
+.creator-preview-notice { margin: 0; padding: 0; display: grid; gap: 3px; }
 .creator-preview-notice strong { color: var(--fc-ink); font-size: 15px; line-height: 21px; }
 .creator-preview-notice span { color: var(--fc-secondary); font-size: 14px; line-height: 20px; }
 .ai-wizard-screen { height: calc(100vh - 64px); overflow: hidden; display: flex; flex-direction: column; }
