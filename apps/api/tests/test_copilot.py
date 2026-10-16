@@ -2,6 +2,7 @@
 
 import copy
 import json
+import re
 import time
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -239,6 +240,20 @@ def test_package_fetch_uses_narrow_select(db):
         "title,destination_city,destination_country,duration_days,"
     )
 
+
+def test_package_activities_select_names_only_real_columns():
+    # The mocked _call cannot reject a missing column, but PostgREST does, and
+    # one bad name 502s every co-pilot route. Editor fields such as
+    # activity_name live in the details JSONB (migration 0013), not as columns.
+    columns = {
+        "id", "package_id", "activity_id", "day_number",
+        "sequence_order", "notes", "activity_date", "details",
+    }
+    embed = re.search(r"package_activities\(([^)]*)\)", service.PACKAGE_SELECT)
+    for field in embed.group(1).split(","):
+        source = field.split(":")[-1]
+        assert source in columns or source.startswith("details->"), field
+
 def test_activity_turn_does_not_scan_the_flight_catalog(db):
     client.post(BASE, json={"prompt": "Tokyo food"})
     assert not [c for c in db.calls if c[1] == "flights"]
@@ -336,6 +351,17 @@ def test_database_timeout_respects_remaining_budget(monkeypatch, caplog):
     assert "elapsed_ms=" in caplog.text
     assert "remaining_ms=" in caplog.text
     assert "secret-token-and-prompt" not in caplog.text
+
+
+def test_database_error_logs_table_and_code_but_not_message(monkeypatch, caplog):
+    response = Mock(ok=False, status_code=400)
+    response.json.return_value = {"code": "42703", "message": "secret row value"}
+    monkeypatch.setattr(service.requests, "request", Mock(return_value=response))
+    with pytest.raises(UpstreamError, match="Upstream database error"):
+        service._call("GET", "travel_packages", {}, time.monotonic() + 1)
+    assert "operation=GET travel_packages" in caplog.text
+    assert "status=400 code=42703" in caplog.text
+    assert "secret row value" not in caplog.text
 
 
 def test_retrieval_hard_filters_and_missing_fields():
