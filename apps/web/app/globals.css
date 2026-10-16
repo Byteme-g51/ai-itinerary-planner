@@ -676,6 +676,19 @@ body {
   font-size: 20px;
   line-height: 26px;
 }
+.admin-detail-item__suggestion {
+  margin: 12px 0 0;
+  padding: 8px 12px;
+  border: 1px solid var(--fc-warning-border);
+  border-radius: 8px;
+  background: var(--fc-warning-subtle);
+  color: var(--fc-secondary);
+  font-size: 14px;
+  line-height: 21px;
+}
+.admin-detail-item__suggestion b { margin-right: 8px; color: var(--fc-warning); font-weight: 600; }
+.admin-detail-day__suggestions { margin: 0 0 16px; }
+.admin-detail-day__suggestions .admin-detail-item__suggestion { margin: 0 0 8px; }
 .admin-detail-cover__copy > p {
   max-width: 65ch;
   margin: 12px 0 0;

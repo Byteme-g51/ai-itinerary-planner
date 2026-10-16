@@ -282,7 +282,16 @@ function itemMeta(item: TimelineItem): string[] {
     .filter((value): value is string => Boolean(value));
 }
 
-function ItineraryItem({ item }: { item: TimelineItem }) {
+function SuggestionNote({ issue }: { issue: FeasibilityIssue }) {
+  return (
+    <p className="admin-detail-item__suggestion">
+      <b>Suggestion</b>
+      {issue.message}
+    </p>
+  );
+}
+
+function ItineraryItem({ item, suggestions = [] }: { item: TimelineItem; suggestions?: FeasibilityIssue[] }) {
   const metadata = itemMeta(item);
   return (
     <li className="admin-detail-item">
@@ -296,6 +305,7 @@ function ItineraryItem({ item }: { item: TimelineItem }) {
         {metadata.length ? <p>{metadata.join(" · ")}</p> : null}
         {item.notes ? <p className="admin-detail-item__notes">{item.notes}</p> : null}
         <PhotoStrip photos={item.photos ?? []} label={`Photos for ${item.title}`} />
+        {suggestions.map((issue, index) => <SuggestionNote issue={issue} key={`${issue.error_code}-${index}`} />)}
       </div>
       <strong className="admin-detail-item__price">{item.price}</strong>
     </li>
@@ -304,17 +314,47 @@ function ItineraryItem({ item }: { item: TimelineItem }) {
 
 const DAY_TABS_SHOWN = 5;
 
+const normalizeName = (value: string) => value.trim().toLowerCase();
+
+/**
+ * The creator's suggestions that belong to one day: those naming an item on
+ * the day show under that item; the rest (the day itself, or an item that
+ * can't be matched) show once at the top of the day.
+ */
+function suggestionsForDay(suggestions: FeasibilityIssue[], day: number, items: TimelineItem[]) {
+  const byItem = new Map<number, FeasibilityIssue[]>();
+  const general: FeasibilityIssue[] = [];
+  for (const issue of suggestions) {
+    if (!issueDays(issue.field).includes(day)) continue;
+    // The item an issue is about is named in affected_item, or in field_value
+    // when the AI reports the day as the affected item.
+    const names = [issue.affected_item, issue.field_value ?? ""].map(normalizeName).filter(Boolean);
+    const index = items.findIndex((item) => names.includes(normalizeName(item.title)));
+    if (index === -1) {
+      general.push(issue);
+    } else {
+      byItem.set(index, [...(byItem.get(index) ?? []), issue]);
+    }
+  }
+  return { byItem, general };
+}
+
 function Itinerary({
   days,
   selectedDay,
   onSelectDay,
+  suggestions = [],
 }: {
   days: BuilderDay[];
   selectedDay: number;
   onSelectDay: (day: number) => void;
+  suggestions?: FeasibilityIssue[];
 }) {
   const activeIndex = Math.max(0, days.findIndex((day) => day.day === selectedDay));
   const activeDay = days[activeIndex];
+  const daySuggestions = activeDay
+    ? suggestionsForDay(suggestions, activeDay.day, activeDay.items)
+    : { byItem: new Map<number, FeasibilityIssue[]>(), general: [] as FeasibilityIssue[] };
   // Only a window of days is shown; the arrows step through them one at a time.
   const windowStart = Math.max(0, Math.min(activeIndex - Math.floor(DAY_TABS_SHOWN / 2), days.length - DAY_TABS_SHOWN));
   const visibleDays = days.slice(windowStart, windowStart + DAY_TABS_SHOWN);
@@ -371,9 +411,16 @@ function Itinerary({
           </div>
           {activeDay.story ? <p className="admin-detail-day__story">{activeDay.story}</p> : null}
           <PhotoStrip photos={activeDay.photos ?? []} label={`Photos for day ${activeDay.day}`} />
+          {daySuggestions.general.length ? (
+            <div className="admin-detail-day__suggestions" aria-label={`Suggestions for day ${activeDay.day}`}>
+              {daySuggestions.general.map((issue, index) => <SuggestionNote issue={issue} key={`${issue.error_code}-${index}`} />)}
+            </div>
+          ) : null}
           {activeDay.items.length ? (
             <ol className="admin-detail-items">
-              {activeDay.items.map((item) => <ItineraryItem item={item} key={`${activeDay.id}-${item.id}`} />)}
+              {activeDay.items.map((item, index) => (
+                <ItineraryItem item={item} suggestions={daySuggestions.byItem.get(index)} key={`${activeDay.id}-${item.id}`} />
+              ))}
             </ol>
           ) : (
             <p className="admin-detail-empty-day">No itinerary items were submitted for this day.</p>
@@ -415,6 +462,11 @@ const SUGGESTIONS_SHOWN = 2;
 function issueDay(field?: string): number | null {
   const match = field?.match(/^Day (\d+)/);
   return match ? Number(match[1]) : null;
+}
+
+/** Every day a field names, e.g. "Day 1, Day 3" or "Day 4 – Morning". */
+function issueDays(field?: string): number[] {
+  return [...(field ?? "").matchAll(/Day (\d+)/g)].map((match) => Number(match[1]));
 }
 
 function formatCheckedAt(iso: string): string {
@@ -737,7 +789,7 @@ export function AdminReviewDetailView(props: AdminReviewDetailViewProps): ReactN
           <div className="admin-detail-main">
             <Cover pkg={props.packageDetail} />
             <PhotoReview photos={reviewPhotos(props.packageDetail, days)} />
-            <Itinerary days={days} selectedDay={props.selectedDay} onSelectDay={props.onSelectDay} />
+            <Itinerary days={days} selectedDay={props.selectedDay} onSelectDay={props.onSelectDay} suggestions={props.packageDetail.latest_feasibility?.soft_warnings} />
           </div>
           <DecisionPanel pkg={props.packageDetail} onOpenApprove={props.onOpenApprove} onOpenReject={props.onOpenReject} onSelectDay={props.onSelectDay} />
         </div>
