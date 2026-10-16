@@ -48,6 +48,7 @@ import {
 } from "../lib/creator-api";
 import { pendingMediaStorageKey, parsePendingMediaDays, type PendingMediaDays } from "../lib/pending-media";
 import { itinerarySnapshotStorageKey, parseWizardVibesDraft, wizardVibesStorageKey } from "../lib/review-draft";
+import { normalizeSeason, packageVibeLabels, vibeIdsFromLabels } from "../lib/vibes";
 import { APP_ROUTES } from "../lib/routes";
 import { iataOf } from "../lib/ai/itinerary";
 import { ACTIVITY_GAP_MIN, minutesToTime, TRANSFER_BUFFER_MIN } from "../lib/feasibility";
@@ -1156,28 +1157,51 @@ export default function ItineraryEditor({
   // the more reliable signal for "what city is this day actually in."
   const activeDayCity = pkg.destination_city ?? null;
   const tripDestination = [pkg.destination_city, pkg.destination_country].filter(Boolean).join(", ");
-  // Vibes/season have no backend field (see the wizard's create flow) — this
-  // is a best-effort read of the sessionStorage stash written at creation,
-  // so it only shows up in the browser tab that made or last edited the trip.
-  // Editing here re-writes the same stash so the display updates immediately.
-  const [tripVibesDraft, setTripVibesDraft] = useState(() => (
-    typeof window === "undefined" ? null : parseWizardVibesDraft(window.sessionStorage.getItem(wizardVibesStorageKey(pkg.package_id)))
-  ));
+  // Vibes/season live on the package (travel_packages.vibes / season). A session stash from before the columns
+  // existed may still hold a value the server never received.
+  const [tripVibesDraft, setTripVibesDraft] = useState<{ vibes: string[]; season: string | null } | null>(() => {
+    const savedVibes = packageVibeLabels(pkg);
+    const savedSeason = normalizeSeason(pkg.season);
+    const stash = typeof window === "undefined"
+      ? null
+      : parseWizardVibesDraft(window.sessionStorage.getItem(wizardVibesStorageKey(pkg.package_id)));
+    return {
+      vibes: savedVibes.length ? savedVibes : stash?.vibes ?? [],
+      season: savedSeason ?? stash?.season ?? null,
+    };
+  });
   const [editingTripParams, setEditingTripParams] = useState(false);
   const [tripParamsDraft, setTripParamsDraft] = useState<{ vibes: string[]; season: string | null }>({ vibes: [], season: null });
   const startEditingTripParams = () => {
     setTripParamsDraft({ vibes: tripVibesDraft?.vibes ?? [], season: tripVibesDraft?.season ?? null });
     setEditingTripParams(true);
   };
-  const saveTripParams = () => {
+  const [savingTripParams, setSavingTripParams] = useState(false);
+  const saveTripParams = async () => {
+    if (savingTripParams) return;
     const next = { vibes: tripParamsDraft.vibes, season: tripParamsDraft.season };
+    setSavingTripParams(true);
     try {
-      window.sessionStorage.setItem(wizardVibesStorageKey(pkg.package_id), JSON.stringify(next));
-    } catch {
-      // best-effort only
+      const token = await accessToken();
+      if (!token) {
+        onSessionExpired();
+        throw new Error("Your session expired. Please sign in again.");
+      }
+      // Sent on its own so a trip-details edit never writes the unsaved
+      // day edits; the API keeps every field that is omitted.
+      const persisted = await updatePackage(fetch, API_URL, token, pkg.package_id, {
+        vibes: vibeIdsFromLabels(next.vibes),
+        season: normalizeSeason(next.season),
+      });
+      setPackageDetail((current) => ({ ...current, vibes: persisted.vibes ?? [], season: persisted.season ?? null }));
+      setTripVibesDraft(next);
+      setEditingTripParams(false);
+      showNotice("Trip details saved");
+    } catch (error) {
+      showNotice(error instanceof Error ? error.message : "Unable to save trip details.");
+    } finally {
+      setSavingTripParams(false);
     }
-    setTripVibesDraft(next);
-    setEditingTripParams(false);
   };
   // buildDaysFromPackage stamps every row of a stay with hotelStayGroupKey,
   // so the API hotel is looked up by that key rather than by counting rows —
@@ -1243,13 +1267,13 @@ export default function ItineraryEditor({
     const hotelItem = days.flatMap((day) => day.items).find((item) => item.type === "HOTEL");
     const hotelName = hotelItem?.hotelName ?? hotelItem?.title.replace(STAY_LABEL_SUFFIX, "") ?? "";
 
-    // Season is set once, in the AI creation wizard, and stashed in sessionStorage
-    // keyed by package_id (no backend field for it yet — see review-draft.ts).
-    // Manually-created packages, or a wizard package opened in a new session,
-    // simply have none stored — travel_season stays undefined rather than guessing.
-    const wizardSeason = typeof window === "undefined"
+    // The saved season (travel_packages.season) is the source; a session stash
+    // from before the column existed is only a fallback. With neither,
+    // travel_season stays undefined rather than guessing.
+    const stashedSeason = typeof window === "undefined"
       ? null
       : parseWizardVibesDraft(window.sessionStorage.getItem(wizardVibesStorageKey(pkg.package_id)))?.season;
+    const wizardSeason = normalizeSeason(tripVibesDraft?.season ?? pkg.season) ?? normalizeSeason(stashedSeason);
     const travelSeason = wizardSeason ? wizardSeason.charAt(0).toUpperCase() + wizardSeason.slice(1) : undefined;
 
     return {
@@ -2995,7 +3019,7 @@ export default function ItineraryEditor({
             {editingTripParams
               ? <div className="trip-params-actions">
                   <button type="button" className="quiet-button" onClick={() => setEditingTripParams(false)}>Cancel</button>
-                  <button type="button" className="publish-button" onClick={saveTripParams}>Save</button>
+                  <button type="button" className="publish-button" disabled={savingTripParams} onClick={saveTripParams}>{savingTripParams ? "Saving…" : "Save"}</button>
                 </div>
               : <button type="button" className="trip-params-edit-button" disabled={isLocked} onClick={startEditingTripParams}><Icon name="pencil" size={14} />Edit trip details</button>}
           </Panel>

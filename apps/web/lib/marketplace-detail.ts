@@ -56,6 +56,23 @@ export function planItineraryPhotos(
   };
 }
 
+/**
+ * Grid placement for a stop's photo mosaic (at most 3 tiles are drawn). Three or
+ * more photos: one large tile plus two stacked. Exactly two: two equal tiles
+ * that each fill the full height — the three-tile layout would leave an empty
+ * cell under the second photo.
+ */
+export function mosaicLayout(photoCount: number): { columns: string; tiles: { column: string; row: string }[] } {
+  if (photoCount <= 1) return { columns: "1fr", tiles: [{ column: "1", row: "1 / 3" }] };
+  if (photoCount === 2) {
+    return { columns: "1fr 1fr", tiles: [{ column: "1", row: "1 / 3" }, { column: "2", row: "1 / 3" }] };
+  }
+  return {
+    columns: "1.4fr 1fr",
+    tiles: [{ column: "1", row: "1 / 3" }, { column: "2", row: "1" }, { column: "2", row: "2" }],
+  };
+}
+
 export function initials(name: string): string {
   const letters = name
     .split(/\s+/)

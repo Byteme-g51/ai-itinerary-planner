@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { formatTripLength, initials, planItineraryPhotos } from "./marketplace-detail";
+import { formatTripLength, initials, mosaicLayout, planItineraryPhotos } from "./marketplace-detail";
 
 test("formatTripLength renders nights as one less than days", () => {
   assert.equal(formatTripLength(3), "3 Days / 2 Nights");
@@ -86,4 +86,26 @@ test("initials derives up to two uppercase letters from a name", () => {
   assert.equal(initials("Elena Rossi"), "ER");
   assert.equal(initials("Madonna"), "M");
   assert.equal(initials(""), "?");
+});
+
+test("two photos fill the whole tile as two equal halves, with no empty cell", () => {
+  // Regression: the three-tile layout put the second photo in one half-height
+  // cell and left the cell under it blank.
+  const { columns, tiles } = mosaicLayout(2);
+  assert.equal(columns, "1fr 1fr");
+  assert.deepEqual(tiles, [{ column: "1", row: "1 / 3" }, { column: "2", row: "1 / 3" }]);
+});
+
+test("three or more photos keep one large tile plus two stacked, and every cell is used", () => {
+  for (const count of [3, 4, 6]) {
+    const { columns, tiles } = mosaicLayout(count);
+    assert.equal(columns, "1.4fr 1fr");
+    assert.deepEqual(tiles, [{ column: "1", row: "1 / 3" }, { column: "2", row: "1" }, { column: "2", row: "2" }]);
+  }
+});
+
+test("mosaicLayout always has a placement for every tile it can draw", () => {
+  assert.equal(mosaicLayout(2).tiles.length, 2);
+  assert.equal(mosaicLayout(3).tiles.length, 3);
+  assert.ok(mosaicLayout(0).tiles.length >= 1);
 });

@@ -1,8 +1,11 @@
 "use client";
 
+import { packageVibeLabels } from "../../lib/vibes";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
+
+import MarkdownText from "../markdown-text";
 
 import {
   AdminApiError,
@@ -161,9 +164,56 @@ function ReviewIntro({ pkg }: { pkg: AdminPackageDetail }) {
   );
 }
 
+// A long description is cut to about six lines until the admin asks for more.
+// The heuristic only decides what the first paint shows; the measured height
+// replaces it as soon as the browser has laid the text out.
+const LONG_DESCRIPTION_CHARS = 380;
+// Keep in step with the max-height of .admin-detail-description--clamped.
+const DESCRIPTION_CLAMP_PX = 132;
+
+function ExpandableDescription({ text }: { text: string }) {
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const [expanded, setExpanded] = useState(false);
+  const [overflowing, setOverflowing] = useState(text.length > LONG_DESCRIPTION_CHARS);
+
+  useEffect(() => {
+    const body = bodyRef.current;
+    if (!body || expanded) return;
+    // scrollHeight is the full text height even while the box is cut short.
+    const measure = () => setOverflowing(body.scrollHeight > DESCRIPTION_CLAMP_PX + 1);
+    measure();
+    window.addEventListener("resize", measure);
+    return () => window.removeEventListener("resize", measure);
+  }, [text, expanded]);
+
+  return (
+    <div className="admin-detail-description-wrap">
+      <div
+        ref={bodyRef}
+        id="admin-detail-description"
+        className={overflowing && !expanded ? "admin-detail-description admin-detail-description--clamped" : "admin-detail-description"}
+      >
+        <MarkdownText text={text} />
+      </div>
+      {overflowing || expanded ? (
+        <button
+          type="button"
+          className="admin-detail-description__toggle"
+          aria-expanded={expanded}
+          aria-controls="admin-detail-description"
+          onClick={() => setExpanded((current) => !current)}
+        >
+          {expanded ? "Show less" : "Show more"}
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
 function Cover({ pkg }: { pkg: AdminPackageDetail }) {
   return (
     <section className="admin-detail-cover" aria-labelledby="admin-detail-overview-title">
+      <div className="admin-detail-cover__top">
       <div className="admin-detail-cover__media">
         {safeImageSrc(pkg.cover_image_url) ? (
           // The API owns this URL and may return any configured storage host.
@@ -178,19 +228,17 @@ function Cover({ pkg }: { pkg: AdminPackageDetail }) {
       </div>
       <div className="admin-detail-cover__copy">
         <h2 id="admin-detail-overview-title">Package overview</h2>
-        <p>{pkg.description?.trim() || "No package description was provided."}</p>
-        <dl className="admin-detail-facts">
-          <div><dt>Destination</dt><dd>{formatAdminDestination(pkg)}</dd></div>
-          <div><dt>Duration</dt><dd>{formatAdminDuration(pkg.duration_days)}</dd></div>
-          <div><dt>Group size</dt><dd>{pkg.max_group_size ? `Up to ${pkg.max_group_size}` : "Not provided"}</dd></div>
-          <div><dt>Season</dt><dd>{pkg.season || "Not provided"}</dd></div>
-        </dl>
-        {pkg.tags?.length ? (
-          <ul className="admin-detail-tags" aria-label="Package tags">
-            {pkg.tags.map((tag) => <li key={tag}>{tag}</li>)}
-          </ul>
-        ) : null}
+        {pkg.description?.trim()
+          ? <ExpandableDescription text={pkg.description} />
+          : <p>No package description was provided.</p>}
       </div>
+      </div>
+      <dl className="admin-detail-facts">
+        <div><dt>Destination</dt><dd>{formatAdminDestination(pkg)}</dd></div>
+        <div><dt>Duration</dt><dd>{formatAdminDuration(pkg.duration_days)}</dd></div>
+        <div><dt>Vibe</dt><dd>{packageVibeLabels(pkg).join(" · ") || "Not provided"}</dd></div>
+        <div><dt>Season</dt><dd>{pkg.season || "Not provided"}</dd></div>
+      </dl>
     </section>
   );
 }
@@ -282,7 +330,16 @@ function itemMeta(item: TimelineItem): string[] {
     .filter((value): value is string => Boolean(value));
 }
 
-function ItineraryItem({ item }: { item: TimelineItem }) {
+function SuggestionNote({ issue }: { issue: FeasibilityIssue }) {
+  return (
+    <p className="admin-detail-item__suggestion">
+      <b>Suggestion</b>
+      {issue.message}
+    </p>
+  );
+}
+
+function ItineraryItem({ item, suggestions = [] }: { item: TimelineItem; suggestions?: FeasibilityIssue[] }) {
   const metadata = itemMeta(item);
   return (
     <li className="admin-detail-item">
@@ -296,6 +353,7 @@ function ItineraryItem({ item }: { item: TimelineItem }) {
         {metadata.length ? <p>{metadata.join(" · ")}</p> : null}
         {item.notes ? <p className="admin-detail-item__notes">{item.notes}</p> : null}
         <PhotoStrip photos={item.photos ?? []} label={`Photos for ${item.title}`} />
+        {suggestions.map((issue, index) => <SuggestionNote issue={issue} key={`${issue.error_code}-${index}`} />)}
       </div>
       <strong className="admin-detail-item__price">{item.price}</strong>
     </li>
@@ -304,17 +362,47 @@ function ItineraryItem({ item }: { item: TimelineItem }) {
 
 const DAY_TABS_SHOWN = 5;
 
+const normalizeName = (value: string) => value.trim().toLowerCase();
+
+/**
+ * The creator's suggestions that belong to one day: those naming an item on
+ * the day show under that item; the rest (the day itself, or an item that
+ * can't be matched) show once at the top of the day.
+ */
+function suggestionsForDay(suggestions: FeasibilityIssue[], day: number, items: TimelineItem[]) {
+  const byItem = new Map<number, FeasibilityIssue[]>();
+  const general: FeasibilityIssue[] = [];
+  for (const issue of suggestions) {
+    if (!issueDays(issue.field).includes(day)) continue;
+    // The item an issue is about is named in affected_item, or in field_value
+    // when the AI reports the day as the affected item.
+    const names = [issue.affected_item, issue.field_value ?? ""].map(normalizeName).filter(Boolean);
+    const index = items.findIndex((item) => names.includes(normalizeName(item.title)));
+    if (index === -1) {
+      general.push(issue);
+    } else {
+      byItem.set(index, [...(byItem.get(index) ?? []), issue]);
+    }
+  }
+  return { byItem, general };
+}
+
 function Itinerary({
   days,
   selectedDay,
   onSelectDay,
+  suggestions = [],
 }: {
   days: BuilderDay[];
   selectedDay: number;
   onSelectDay: (day: number) => void;
+  suggestions?: FeasibilityIssue[];
 }) {
   const activeIndex = Math.max(0, days.findIndex((day) => day.day === selectedDay));
   const activeDay = days[activeIndex];
+  const daySuggestions = activeDay
+    ? suggestionsForDay(suggestions, activeDay.day, activeDay.items)
+    : { byItem: new Map<number, FeasibilityIssue[]>(), general: [] as FeasibilityIssue[] };
   // Only a window of days is shown; the arrows step through them one at a time.
   const windowStart = Math.max(0, Math.min(activeIndex - Math.floor(DAY_TABS_SHOWN / 2), days.length - DAY_TABS_SHOWN));
   const visibleDays = days.slice(windowStart, windowStart + DAY_TABS_SHOWN);
@@ -371,9 +459,16 @@ function Itinerary({
           </div>
           {activeDay.story ? <p className="admin-detail-day__story">{activeDay.story}</p> : null}
           <PhotoStrip photos={activeDay.photos ?? []} label={`Photos for day ${activeDay.day}`} />
+          {daySuggestions.general.length ? (
+            <div className="admin-detail-day__suggestions" aria-label={`Suggestions for day ${activeDay.day}`}>
+              {daySuggestions.general.map((issue, index) => <SuggestionNote issue={issue} key={`${issue.error_code}-${index}`} />)}
+            </div>
+          ) : null}
           {activeDay.items.length ? (
             <ol className="admin-detail-items">
-              {activeDay.items.map((item) => <ItineraryItem item={item} key={`${activeDay.id}-${item.id}`} />)}
+              {activeDay.items.map((item, index) => (
+                <ItineraryItem item={item} suggestions={daySuggestions.byItem.get(index)} key={`${activeDay.id}-${item.id}`} />
+              ))}
             </ol>
           ) : (
             <p className="admin-detail-empty-day">No itinerary items were submitted for this day.</p>
@@ -415,6 +510,11 @@ const SUGGESTIONS_SHOWN = 2;
 function issueDay(field?: string): number | null {
   const match = field?.match(/^Day (\d+)/);
   return match ? Number(match[1]) : null;
+}
+
+/** Every day a field names, e.g. "Day 1, Day 3" or "Day 4 – Morning". */
+function issueDays(field?: string): number[] {
+  return [...(field ?? "").matchAll(/Day (\d+)/g)].map((match) => Number(match[1]));
 }
 
 function formatCheckedAt(iso: string): string {
@@ -538,7 +638,6 @@ function FeasibilityCard({ result, onGoToDay }: { result: SubmittedFeasibility |
 
       <div className="admin-detail-feas__foot">
         <p>Checked by the creator at submission{checkedAt ? ` · ${checkedAt}` : ""}</p>
-        <p>Calculated in the creator&apos;s browser, not verified by the server.</p>
       </div>
     </section>
   );
@@ -737,7 +836,7 @@ export function AdminReviewDetailView(props: AdminReviewDetailViewProps): ReactN
           <div className="admin-detail-main">
             <Cover pkg={props.packageDetail} />
             <PhotoReview photos={reviewPhotos(props.packageDetail, days)} />
-            <Itinerary days={days} selectedDay={props.selectedDay} onSelectDay={props.onSelectDay} />
+            <Itinerary days={days} selectedDay={props.selectedDay} onSelectDay={props.onSelectDay} suggestions={props.packageDetail.latest_feasibility?.soft_warnings} />
           </div>
           <DecisionPanel pkg={props.packageDetail} onOpenApprove={props.onOpenApprove} onOpenReject={props.onOpenReject} onSelectDay={props.onSelectDay} />
         </div>

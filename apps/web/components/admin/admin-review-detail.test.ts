@@ -29,7 +29,7 @@ const packageDetail: AdminPackageDetail = {
   description: "A measured itinerary focused on local food and quieter neighbourhoods.",
   max_group_size: 8,
   season: "dry season",
-  tags: ["food", "slow travel"],
+  vibes: ["foodie", "scenic"],
   flights: [
     {
       flight_id: "flight-1",
@@ -184,13 +184,16 @@ test("detailFailure maps API statuses to dedicated review states", () => {
   });
 });
 
-test("review cover media stays in a bounded crop when uploads are portrait", () => {
+test("review cover is a fixed-height banner above the text, so a long description cannot leave a gap", () => {
   const css = readFileSync(
     fileURLToPath(new URL("../../app/globals.css", import.meta.url)),
     "utf8",
   );
-  assert.match(css, /\.admin-detail-cover__media\s*\{[\s\S]*?height:\s*340px/);
+  // A tall portrait upload is cropped, never allowed to size the card, and the
+  // photo no longer sits beside the text, so there is no height to mismatch.
+  assert.match(css, /\.admin-detail-cover__media\s*\{[\s\S]*?height:\s*280px/);
   assert.match(css, /\.admin-detail-cover__media img\s*\{[\s\S]*?object-fit:\s*cover/);
+  assert.doesNotMatch(css, /\.admin-detail-cover__top\s*\{[^}]*grid-template-columns/);
 });
 
 test("decision dialogs opt out of the browser's absolute dialog positioning", () => {
@@ -360,7 +363,7 @@ test("the admin sees the creator's score and suggestions, without Critical or Pa
   assert.match(html, /Show 1 more/, "only the first two suggestions are open at first");
   assert.doesNotMatch(html, /Day 5 has no activities scheduled\./);
   assert.match(html, /Checked by the creator at submission/);
-  assert.match(html, /not verified by the server/);
+  assert.doesNotMatch(html, /not verified by the server/);
   assert.doesNotMatch(html, /Passed|Re-check|Check content/);
 });
 
@@ -424,4 +427,78 @@ test("the day tabs show a window of days and the arrows step through them", () =
 
   assert.match(html(1), /aria-label="Previous day"[^>]*disabled/);
   assert.match(html(10), /aria-label="Next day"[^>]*disabled/);
+});
+
+test("a long description is cut with a Show more control; a short one is not", () => {
+  const long = render({ packageDetail: { ...packageDetail, description: `# Trip\n\n${"A long paragraph about the trip. ".repeat(30)}` } });
+  assert.match(long, /admin-detail-description--clamped/);
+  assert.match(long, /aria-expanded="false"[^>]*>Show more</);
+
+  const short = render({ packageDetail: { ...packageDetail, description: "A short summary." } });
+  assert.doesNotMatch(short, /Show more/);
+  assert.doesNotMatch(short, /admin-detail-description--clamped/, "a short text is never faded out");
+});
+
+test("the facts sit in one row under the overview, not beside the photo", () => {
+  const html = render();
+  assert.ok(html.indexOf("admin-detail-cover__top") < html.indexOf("admin-detail-facts"));
+  const top = html.slice(html.indexOf("admin-detail-cover__top"), html.indexOf("admin-detail-facts"));
+  assert.doesNotMatch(top, /<dt>Destination/);
+  assert.match(html, /<dt>Destination<\/dt>[\s\S]*<dt>Duration<\/dt>[\s\S]*<dt>Vibe<\/dt>[\s\S]*<dt>Season<\/dt>/);
+});
+
+test("the overview shows the package vibes in place of the group size", () => {
+  const withVibes = render({ packageDetail: { ...packageDetail, vibes: ["foodie", "adventure"] } as never });
+  assert.match(withVibes, /<dt>Vibe<\/dt><dd>Adventure · Foodie<\/dd>/);
+  assert.doesNotMatch(withVibes, /Group size/);
+
+  const none = render({ packageDetail: { ...packageDetail, vibes: [] } as never });
+  assert.match(none, /<dt>Vibe<\/dt><dd>Not provided<\/dd>/);
+});
+
+test("a suggestion also shows on the day and item it is about", () => {
+  const issue = (overrides: Record<string, unknown>) => ({
+    ...suggestion(1), field: "Day 1", ...overrides,
+  });
+  const latest_feasibility = feasibility({
+    soft_warnings: [
+      issue({ affected_item: "Market walk", message: "Market walk is scheduled at midday, not evening." }),
+      issue({ affected_item: "Day 1", message: "Day 1 is a very long day." }),
+      issue({ affected_item: "Market walk", field: "Day 2", message: "Only about Day 2." }),
+    ],
+  });
+  const html = render({ packageDetail: { ...packageDetail, latest_feasibility } as never, selectedDay: 1 });
+
+  const noteCount = (html.match(/class="admin-detail-item__suggestion"/g) ?? []).length;
+  assert.equal(noteCount, 2, "one under the item, one for the day");
+  const item = html.slice(html.indexOf("<h4>Market walk</h4>"));
+  assert.match(item.slice(0, item.indexOf("</li>")), /Market walk is scheduled at midday/);
+  assert.match(html, /aria-label="Suggestions for day 1"/);
+  assert.match(html, /Day 1 is a very long day\./);
+  const itinerary = html.slice(0, html.indexOf("admin-detail-sidebar"));
+  assert.doesNotMatch(itinerary, /Only about Day 2/, "another day's note stays off this day");
+});
+
+test("with no suggestions the itinerary shows no inline notes", () => {
+  const html = render({ packageDetail: { ...packageDetail, latest_feasibility: feasibility({ soft_warnings: [] }) } as never });
+  assert.doesNotMatch(html, /admin-detail-item__suggestion/);
+  assert.doesNotMatch(html, /Suggestions for day/);
+});
+
+test("a suggestion naming several days shows on each, and an item named only in field_value is still matched", () => {
+  const latest_feasibility = feasibility({
+    soft_warnings: [
+      { ...suggestion(1), field: "Day 1, Day 2", affected_item: "Day 1, Day 2", message: "Both days are thin." },
+      { ...suggestion(1), field: "Day 1 \u2013 Morning", affected_item: "Day 1", field_value: "Market walk", message: "Walk is too early." },
+    ],
+  });
+  const day1 = render({ packageDetail: { ...packageDetail, latest_feasibility } as never, selectedDay: 1 });
+  const day2 = render({ packageDetail: { ...packageDetail, latest_feasibility } as never, selectedDay: 2 });
+
+  const inItinerary = (html: string) => html.slice(0, html.indexOf("admin-detail-sidebar"));
+  assert.match(inItinerary(day1), /Both days are thin\./);
+  assert.match(inItinerary(day2), /Both days are thin\./);
+  const market = inItinerary(day1).slice(inItinerary(day1).indexOf("<h4>Market walk</h4>"));
+  assert.match(market.slice(0, market.indexOf("</li>")), /Walk is too early\./);
+  assert.doesNotMatch(inItinerary(day2), /Walk is too early\./);
 });

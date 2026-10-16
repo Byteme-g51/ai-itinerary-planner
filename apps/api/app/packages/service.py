@@ -185,7 +185,11 @@ def get_public_package_detail(package_id):
         },
     )
     rows = response.json()
-    return _to_detail(rows[0]) if rows else None
+    if not rows:
+        return None
+    # Creator-reported and unverified: for the owner and admins only.
+    rows[0].pop("latest_feasibility", None)
+    return _to_detail(rows[0])
 
 
 def _flight_from_row(pf):
@@ -553,7 +557,7 @@ def _cleanup_orphaned_catalog_rows(row):
                 pass
 
 
-def submit_package(package_id, headers, uid, note):
+def submit_package(package_id, headers, uid, note, feasibility=None):
     """Submit is a single atomic RPC: locks the owned package row before
     reading component counts/status (fixing the save/submit race), rather
     than reading components first and only locking for the status write.
@@ -564,7 +568,12 @@ def submit_package(package_id, headers, uid, note):
     result = _call(
         "post",
         "rpc/submit_package_for_review",
-        json={"p_actor_id": uid, "p_package_id": package_id, "p_note": note},
+        json={
+            "p_actor_id": uid,
+            "p_package_id": package_id,
+            "p_note": note,
+            "p_feasibility": feasibility,
+        },
         headers=_admin_headers(),
     ).json()
     outcome = result.get("outcome")
