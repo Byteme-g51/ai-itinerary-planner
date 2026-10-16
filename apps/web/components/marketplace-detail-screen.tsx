@@ -849,12 +849,12 @@ export function PackageDetailView({
               <section style={{ paddingTop: 48 }}>
                 <p style={eyebrowStyle}>Included in this trip</p>
                 <div style={{
-                  display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+                  display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))",
                   borderTop: `1px solid ${color.border}`, borderBottom: `1px solid ${color.border}`,
                   marginTop: 16,
                 }}>
                   {includedItems.map((item) => (
-                    <div key={item.label} style={{ padding: "20px 24px 20px 0" }}>
+                    <div key={item.label} style={{ padding: "20px 16px 20px 0" }}>
                       {/* Icon centers on the label+value pair — the optional sub hangs
                           below as a footnote, so short items don't leave the icon drooping. */}
                       <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
