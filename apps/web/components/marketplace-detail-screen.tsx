@@ -9,6 +9,7 @@ import { formatTripLength, initials, planItineraryPhotos } from "../lib/marketpl
 import { buildDaysFromPackage, type TimelineItem } from "../lib/itinerary-builder";
 import { dateAfter, pickFlightLegs } from "../lib/booking-options";
 import { vibeLabelsFromTags } from "../lib/vibes";
+import MarkdownText from "./markdown-text";
 import type { CreatorPackageDetail } from "../lib/creator-api";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
@@ -804,7 +805,7 @@ export function PackageDetailView({
                 {pkg.description && (
                   <>
                     <SectionTitle>About this journey</SectionTitle>
-                    <p style={{ margin: "16px 0 0", fontSize: 18, lineHeight: 1.6, color: color.textSecondary, maxWidth: 720 }}>{pkg.description}</p>
+                    <MarkdownText text={pkg.description} style={{ margin: "16px 0 0", fontSize: 18, lineHeight: 1.6, color: color.textSecondary, maxWidth: 720 }} />
                   </>
                 )}
                 {!previewLabel && (

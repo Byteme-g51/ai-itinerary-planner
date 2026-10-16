@@ -184,13 +184,16 @@ test("detailFailure maps API statuses to dedicated review states", () => {
   });
 });
 
-test("review cover media stays in a bounded crop when uploads are portrait", () => {
+test("review cover is a fixed-height banner above the text, so a long description cannot leave a gap", () => {
   const css = readFileSync(
     fileURLToPath(new URL("../../app/globals.css", import.meta.url)),
     "utf8",
   );
-  assert.match(css, /\.admin-detail-cover__media\s*\{[\s\S]*?height:\s*340px/);
+  // A tall portrait upload is cropped, never allowed to size the card, and the
+  // photo no longer sits beside the text, so there is no height to mismatch.
+  assert.match(css, /\.admin-detail-cover__media\s*\{[\s\S]*?height:\s*280px/);
   assert.match(css, /\.admin-detail-cover__media img\s*\{[\s\S]*?object-fit:\s*cover/);
+  assert.doesNotMatch(css, /\.admin-detail-cover__top\s*\{[^}]*grid-template-columns/);
 });
 
 test("decision dialogs opt out of the browser's absolute dialog positioning", () => {
@@ -360,7 +363,7 @@ test("the admin sees the creator's score and suggestions, without Critical or Pa
   assert.match(html, /Show 1 more/, "only the first two suggestions are open at first");
   assert.doesNotMatch(html, /Day 5 has no activities scheduled\./);
   assert.match(html, /Checked by the creator at submission/);
-  assert.match(html, /not verified by the server/);
+  assert.doesNotMatch(html, /not verified by the server/);
   assert.doesNotMatch(html, /Passed|Re-check|Check content/);
 });
 
@@ -424,4 +427,31 @@ test("the day tabs show a window of days and the arrows step through them", () =
 
   assert.match(html(1), /aria-label="Previous day"[^>]*disabled/);
   assert.match(html(10), /aria-label="Next day"[^>]*disabled/);
+});
+
+test("a long description is cut with a Show more control; a short one is not", () => {
+  const long = render({ packageDetail: { ...packageDetail, description: `# Trip\n\n${"A long paragraph about the trip. ".repeat(30)}` } });
+  assert.match(long, /admin-detail-description--clamped/);
+  assert.match(long, /aria-expanded="false"[^>]*>Show more</);
+
+  const short = render({ packageDetail: { ...packageDetail, description: "A short summary." } });
+  assert.doesNotMatch(short, /Show more/);
+  assert.doesNotMatch(short, /admin-detail-description--clamped/, "a short text is never faded out");
+});
+
+test("the facts sit in one row under the overview, not beside the photo", () => {
+  const html = render();
+  assert.ok(html.indexOf("admin-detail-cover__top") < html.indexOf("admin-detail-facts"));
+  const top = html.slice(html.indexOf("admin-detail-cover__top"), html.indexOf("admin-detail-facts"));
+  assert.doesNotMatch(top, /<dt>Destination/);
+  assert.match(html, /<dt>Destination<\/dt>[\s\S]*<dt>Duration<\/dt>[\s\S]*<dt>Vibe<\/dt>[\s\S]*<dt>Season<\/dt>/);
+});
+
+test("the overview shows the package vibes in place of the group size", () => {
+  const withVibes = render({ packageDetail: { ...packageDetail, vibes: ["foodie", "adventure"] } as never });
+  assert.match(withVibes, /<dt>Vibe<\/dt><dd>Adventure · Foodie<\/dd>/);
+  assert.doesNotMatch(withVibes, /Group size/);
+
+  const none = render({ packageDetail: { ...packageDetail, vibes: [] } as never });
+  assert.match(none, /<dt>Vibe<\/dt><dd>Not provided<\/dd>/);
 });

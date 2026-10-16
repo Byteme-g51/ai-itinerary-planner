@@ -2,7 +2,10 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
+
+import MarkdownText from "../markdown-text";
+import { VIBES } from "../../lib/vibes";
 
 import {
   AdminApiError,
@@ -161,9 +164,62 @@ function ReviewIntro({ pkg }: { pkg: AdminPackageDetail }) {
   );
 }
 
+// A long description is cut to about six lines until the admin asks for more.
+// The heuristic only decides what the first paint shows; the measured height
+// replaces it as soon as the browser has laid the text out.
+const LONG_DESCRIPTION_CHARS = 380;
+// Keep in step with the max-height of .admin-detail-description--clamped.
+const DESCRIPTION_CLAMP_PX = 132;
+
+function ExpandableDescription({ text }: { text: string }) {
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const [expanded, setExpanded] = useState(false);
+  const [overflowing, setOverflowing] = useState(text.length > LONG_DESCRIPTION_CHARS);
+
+  useEffect(() => {
+    const body = bodyRef.current;
+    if (!body || expanded) return;
+    // scrollHeight is the full text height even while the box is cut short.
+    const measure = () => setOverflowing(body.scrollHeight > DESCRIPTION_CLAMP_PX + 1);
+    measure();
+    window.addEventListener("resize", measure);
+    return () => window.removeEventListener("resize", measure);
+  }, [text, expanded]);
+
+  return (
+    <div className="admin-detail-description-wrap">
+      <div
+        ref={bodyRef}
+        id="admin-detail-description"
+        className={overflowing && !expanded ? "admin-detail-description admin-detail-description--clamped" : "admin-detail-description"}
+      >
+        <MarkdownText text={text} />
+      </div>
+      {overflowing || expanded ? (
+        <button
+          type="button"
+          className="admin-detail-description__toggle"
+          aria-expanded={expanded}
+          aria-controls="admin-detail-description"
+          onClick={() => setExpanded((current) => !current)}
+        >
+          {expanded ? "Show less" : "Show more"}
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
+/** Display names for the package's `vibes` column (ids such as "foodie"), in the wizard's order. */
+function vibeNames(vibes: readonly string[] | undefined): string[] {
+  const wanted = new Set((vibes ?? []).map((value) => value.trim().toLowerCase()));
+  return VIBES.filter((vibe) => wanted.has(vibe.id) || wanted.has(vibe.label.toLowerCase())).map((vibe) => vibe.label);
+}
+
 function Cover({ pkg }: { pkg: AdminPackageDetail }) {
   return (
     <section className="admin-detail-cover" aria-labelledby="admin-detail-overview-title">
+      <div className="admin-detail-cover__top">
       <div className="admin-detail-cover__media">
         {safeImageSrc(pkg.cover_image_url) ? (
           // The API owns this URL and may return any configured storage host.
@@ -178,19 +234,22 @@ function Cover({ pkg }: { pkg: AdminPackageDetail }) {
       </div>
       <div className="admin-detail-cover__copy">
         <h2 id="admin-detail-overview-title">Package overview</h2>
-        <p>{pkg.description?.trim() || "No package description was provided."}</p>
-        <dl className="admin-detail-facts">
-          <div><dt>Destination</dt><dd>{formatAdminDestination(pkg)}</dd></div>
-          <div><dt>Duration</dt><dd>{formatAdminDuration(pkg.duration_days)}</dd></div>
-          <div><dt>Group size</dt><dd>{pkg.max_group_size ? `Up to ${pkg.max_group_size}` : "Not provided"}</dd></div>
-          <div><dt>Season</dt><dd>{pkg.season || "Not provided"}</dd></div>
-        </dl>
+        {pkg.description?.trim()
+          ? <ExpandableDescription text={pkg.description} />
+          : <p>No package description was provided.</p>}
         {pkg.tags?.length ? (
           <ul className="admin-detail-tags" aria-label="Package tags">
             {pkg.tags.map((tag) => <li key={tag}>{tag}</li>)}
           </ul>
         ) : null}
       </div>
+      </div>
+      <dl className="admin-detail-facts">
+        <div><dt>Destination</dt><dd>{formatAdminDestination(pkg)}</dd></div>
+        <div><dt>Duration</dt><dd>{formatAdminDuration(pkg.duration_days)}</dd></div>
+        <div><dt>Vibe</dt><dd>{vibeNames(pkg.vibes).join(" · ") || "Not provided"}</dd></div>
+        <div><dt>Season</dt><dd>{pkg.season || "Not provided"}</dd></div>
+      </dl>
     </section>
   );
 }
@@ -538,7 +597,6 @@ function FeasibilityCard({ result, onGoToDay }: { result: SubmittedFeasibility |
 
       <div className="admin-detail-feas__foot">
         <p>Checked by the creator at submission{checkedAt ? ` · ${checkedAt}` : ""}</p>
-        <p>Calculated in the creator&apos;s browser, not verified by the server.</p>
       </div>
     </section>
   );

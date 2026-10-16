@@ -34,6 +34,7 @@ import {
 } from "../lib/review-draft";
 import { feasibilityStorageKey, parseStashedFeasibility } from "../lib/feasibility-result";
 import { vibeLabelsFromTags } from "../lib/vibes";
+import MarkdownText from "./markdown-text";
 import { supabase } from "../lib/supabase/client";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
@@ -441,7 +442,9 @@ export default function ItineraryReview({
             <button className="preview-close" onClick={() => setPreviewOpen(false)} aria-label="Close preview"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18" /></svg></button>
             <span>Traveller preview</span>
             <h2 id="preview-title">{packageTitle}</h2>
-            <p>{reviewDraft.description || "Your package description will appear here. Add one before submitting."}</p>
+            {reviewDraft.description.trim()
+              ? <MarkdownText text={reviewDraft.description} />
+              : <p>Your package description will appear here. Add one before submitting.</p>}
             <div><strong>{days.length} days / {nights} nights</strong><strong>${packagePrice.toLocaleString()}</strong></div>
           </section>
         </div>
