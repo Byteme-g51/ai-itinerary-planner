@@ -892,6 +892,7 @@ def test_submit_ok(fake):
         "p_actor_id": UID,
         "p_package_id": PKG,
         "p_note": "ready",
+        "p_feasibility": None,
     }
     # Submission is derived from the authenticated bearer token via
     # service-role headers, never a client-supplied actor ID.
@@ -1223,3 +1224,83 @@ def test_detail_legacy_flight_has_null_relative_fields(fake):
     assert flight["departure_time"] is None
     assert flight["arrival_time"] is None
     assert flight["duration_minutes"] is None
+
+
+FEASIBILITY = {
+    "quality_score": 84,
+    "is_feasible": True,
+    "hard_errors": [],
+    "soft_warnings": [
+        {
+            "error_code": "EMPTY_DAY",
+            "rule": "R05",
+            "severity": "warning",
+            "field": "days[1]",
+            "affected_item": "Day 2",
+            "message": "Day 2 has no activities scheduled.",
+            "action": "Add an activity or a free-time note.",
+        }
+    ],
+    "checked_at": "2026-10-09T05:20:00.000Z",
+}
+
+
+def _route_submit_ok(fake):
+    fake.route("POST", "rpc/submit_package_for_review", FakeResp({"outcome": "ok", "package_id": PKG}))
+    fake.route("GET", "travel_packages", FakeResp([_summary_row(status="pending_review")]))
+
+
+def test_submit_passes_the_feasibility_result_to_the_rpc(fake):
+    _route_submit_ok(fake)
+    resp = client.post(f"/packages/{PKG}/submit", json={"feasibility_result": FEASIBILITY})
+    assert resp.status_code == 200
+    sent = fake.find("POST", "rpc/submit_package_for_review")[0]["json"]
+    assert sent["p_feasibility"] == FEASIBILITY
+    assert sent["p_note"] is None
+
+
+def test_submit_without_a_feasibility_result_sends_null_so_the_old_one_is_cleared(fake):
+    _route_submit_ok(fake)
+    assert client.post(f"/packages/{PKG}/submit").status_code == 200
+    assert fake.find("POST", "rpc/submit_package_for_review")[0]["json"]["p_feasibility"] is None
+
+
+def test_submit_tidies_an_untidy_feasibility_result_instead_of_blocking(fake):
+    _route_submit_ok(fake)
+    issue = FEASIBILITY["soft_warnings"][0]
+    untidy = {
+        **FEASIBILITY,
+        "quality_score": 101.6,
+        "checked_at": "x" * 60,
+        "soft_warnings": [{**issue, "message": "m" * 5000}] * 60,
+    }
+    resp = client.post(f"/packages/{PKG}/submit", json={"feasibility_result": untidy})
+    assert resp.status_code == 200
+    stored = fake.find("POST", "rpc/submit_package_for_review")[0]["json"]["p_feasibility"]
+    assert stored["quality_score"] == 100
+    assert len(stored["checked_at"]) == 40
+    assert len(stored["soft_warnings"]) == 50
+    assert len(stored["soft_warnings"][0]["message"]) == 1000
+
+
+def test_submit_drops_a_result_it_cannot_read_but_still_submits(fake):
+    for bad in ({"is_feasible": "maybe", "checked_at": "now"}, {"quality_score": 80}, "nonsense", []):
+        _route_submit_ok(fake)
+        resp = client.post(f"/packages/{PKG}/submit", json={"feasibility_result": bad})
+        assert resp.status_code == 200, bad
+        assert fake.find("POST", "rpc/submit_package_for_review")[-1]["json"]["p_feasibility"] is None
+
+
+def test_submit_accepts_a_missing_score(fake):
+    _route_submit_ok(fake)
+    resp = client.post(f"/packages/{PKG}/submit", json={"feasibility_result": {**FEASIBILITY, "quality_score": None}})
+    assert resp.status_code == 200
+    assert "quality_score" not in fake.find("POST", "rpc/submit_package_for_review")[0]["json"]["p_feasibility"]
+
+
+def test_owner_detail_returns_the_stored_feasibility_result(fake):
+    fake.route("GET", "travel_packages", FakeResp([{**DETAIL_ROW, "latest_feasibility": FEASIBILITY}]))
+    body = client.get(f"/packages/{PKG}").json()
+    assert body["latest_feasibility"]["quality_score"] == 84
+    fake.route("GET", "travel_packages", FakeResp([DETAIL_ROW]))
+    assert client.get(f"/packages/{PKG}").json()["latest_feasibility"] is None

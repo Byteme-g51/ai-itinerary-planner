@@ -455,3 +455,50 @@ test("the overview shows the package vibes in place of the group size", () => {
   const none = render({ packageDetail: { ...packageDetail, vibes: [] } as never });
   assert.match(none, /<dt>Vibe<\/dt><dd>Not provided<\/dd>/);
 });
+
+test("a suggestion also shows on the day and item it is about", () => {
+  const issue = (overrides: Record<string, unknown>) => ({
+    ...suggestion(1), field: "Day 1", ...overrides,
+  });
+  const latest_feasibility = feasibility({
+    soft_warnings: [
+      issue({ affected_item: "Market walk", message: "Market walk is scheduled at midday, not evening." }),
+      issue({ affected_item: "Day 1", message: "Day 1 is a very long day." }),
+      issue({ affected_item: "Market walk", field: "Day 2", message: "Only about Day 2." }),
+    ],
+  });
+  const html = render({ packageDetail: { ...packageDetail, latest_feasibility } as never, selectedDay: 1 });
+
+  const noteCount = (html.match(/class="admin-detail-item__suggestion"/g) ?? []).length;
+  assert.equal(noteCount, 2, "one under the item, one for the day");
+  const item = html.slice(html.indexOf("<h4>Market walk</h4>"));
+  assert.match(item.slice(0, item.indexOf("</li>")), /Market walk is scheduled at midday/);
+  assert.match(html, /aria-label="Suggestions for day 1"/);
+  assert.match(html, /Day 1 is a very long day\./);
+  const itinerary = html.slice(0, html.indexOf("admin-detail-sidebar"));
+  assert.doesNotMatch(itinerary, /Only about Day 2/, "another day's note stays off this day");
+});
+
+test("with no suggestions the itinerary shows no inline notes", () => {
+  const html = render({ packageDetail: { ...packageDetail, latest_feasibility: feasibility({ soft_warnings: [] }) } as never });
+  assert.doesNotMatch(html, /admin-detail-item__suggestion/);
+  assert.doesNotMatch(html, /Suggestions for day/);
+});
+
+test("a suggestion naming several days shows on each, and an item named only in field_value is still matched", () => {
+  const latest_feasibility = feasibility({
+    soft_warnings: [
+      { ...suggestion(1), field: "Day 1, Day 2", affected_item: "Day 1, Day 2", message: "Both days are thin." },
+      { ...suggestion(1), field: "Day 1 \u2013 Morning", affected_item: "Day 1", field_value: "Market walk", message: "Walk is too early." },
+    ],
+  });
+  const day1 = render({ packageDetail: { ...packageDetail, latest_feasibility } as never, selectedDay: 1 });
+  const day2 = render({ packageDetail: { ...packageDetail, latest_feasibility } as never, selectedDay: 2 });
+
+  const inItinerary = (html: string) => html.slice(0, html.indexOf("admin-detail-sidebar"));
+  assert.match(inItinerary(day1), /Both days are thin\./);
+  assert.match(inItinerary(day2), /Both days are thin\./);
+  const market = inItinerary(day1).slice(inItinerary(day1).indexOf("<h4>Market walk</h4>"));
+  assert.match(market.slice(0, market.indexOf("</li>")), /Walk is too early\./);
+  assert.doesNotMatch(inItinerary(day2), /Walk is too early\./);
+});

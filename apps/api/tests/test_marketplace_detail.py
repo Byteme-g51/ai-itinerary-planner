@@ -37,6 +37,7 @@ FIXTURE = {
     # Private/internal columns that select=* drags along; response_model must
     # strip them from the public payload.
     "submission_note": "please approve quickly",
+    "latest_feasibility": {"quality_score": 80, "is_feasible": True, "hard_errors": [], "soft_warnings": [], "checked_at": "2026-10-09T00:00:00.000Z"},
     "search_tsv": "'tokyo':1 'food':2",
     "creator": {"full_name": "Mia Tanaka", "influencer_profiles": []},
     "package_media": [{"media_id": "m1", "url": "https://x/m1.jpg", "is_cover": True, "sort_order": 1}],
@@ -127,6 +128,9 @@ def test_detail_flattened_shape_and_query(monkeypatch):
     # Internal columns must never reach the public payload
     assert "submission_note" not in body
     assert "search_tsv" not in body
+    # The creator-reported feasibility result is for the owner and admins only
+    assert body["latest_feasibility"] is None
+    assert "is_feasible" not in resp.text
     # Draft-hiding hinges on calling PostgREST with the anon key (RLS)
     assert calls[0]["headers"] == {
         "apikey": "anon-key",
