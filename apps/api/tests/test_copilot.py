@@ -238,6 +238,21 @@ def test_package_fetch_uses_narrow_select(db):
     assert service.PACKAGE_SELECT.startswith(
         "title,destination_city,destination_country,duration_days,"
     )
+    # Every column named for package_activities must actually exist on that
+    # table. A previous select asked for activity_name/start_time/duration_hours,
+    # which live on the `activities` catalog or inside `details` — PostgREST
+    # 400'd and every co-pilot turn died with "Upstream database error". This
+    # test could not catch it, because comparing the constant to itself never
+    # touches a database; the column list below is the guard.
+    package_activity_columns = {
+        "id", "package_id", "activity_id", "day_number",
+        "sequence_order", "notes", "activity_date", "details",
+    }
+    embedded = service.PACKAGE_SELECT.split("package_activities(")[1].split(")")[0]
+    assert set(embedded.split(",")) <= package_activity_columns, (
+        f"selects columns package_activities does not have: "
+        f"{set(embedded.split(',')) - package_activity_columns}"
+    )
 
 def test_activity_turn_does_not_scan_the_flight_catalog(db):
     client.post(BASE, json={"prompt": "Tokyo food"})

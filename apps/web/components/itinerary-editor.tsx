@@ -1119,6 +1119,17 @@ export default function ItineraryEditor({
   // derived here once instead of being re-applied inside every handler.
   const landing = useMemo(() => {
     const arrival = arrivalLanding(days);
+    // TEMP DIAGNOSTIC - remove before committing.
+    if (typeof window !== "undefined") {
+      console.log("[LANDING-DEBUG]", JSON.stringify({
+        arrivalDayIndex: arrival?.dayIndex ?? null,
+        arrivalTime: arrival?.time ?? null,
+        flights: days.flatMap((d, i) => d.items.filter((it) => it.type === "FLIGHT").map((it) => ({
+          dayIndex: i, role: it.flightRole ?? "(unset)", time: it.time,
+          dep: it.departureTime ?? null, arr: it.arrivalTime ?? null,
+        }))),
+      }));
+    }
     if (!arrival) return null;
     const international = deriveFlightType(arrival.flight.originIata, arrival.flight.destinationIata, pkg.destination_country) === "international";
     return { ...arrival, departureTime: arrival.flight.departureTime, international, bufferMin: TRANSFER_BUFFER_MIN[international ? "international" : "domestic"] };

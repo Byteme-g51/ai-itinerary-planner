@@ -545,16 +545,14 @@ export function arrivalLanding(days: BuilderDay[]): { dayIndex: number; time: st
   const flights = days.flatMap((day, dayIndex) =>
     day.items.filter((item) => item.type === "FLIGHT").map((item) => ({ item, dayIndex })));
   if (flights.length === 0) return null;
-  const { item, dayIndex } = flights[0];
-  if (flights.length === 1 && dayIndex === days.length - 1) return null;
+  // The landing day is the day the flight row sits on. The generator re-dates
+  // day 1 to the local arrival date (engine.py _enforce_travel_window), so an
+  // overnight leg is already filed on the day it lands; adding
+  // flightArrivalDayOffset here counted that midnight crossing twice.
+  const { item, dayIndex } = flights.find((f) => f.item.flightRole === "arrival") ?? flights[0];
+  if (item.flightRole !== "arrival" && flights.length === 1 && dayIndex === days.length - 1) return null;
   if (!item.arrivalTime) return null;
-  const datedOffset = flightArrivalDayOffset(
-    item.departureDatetime, timezoneForIata(item.originIata),
-    item.arrivalDatetime, timezoneForIata(item.destinationIata),
-  );
-  const offset = datedOffset ?? (item.departureTime && item.arrivalTime < item.departureTime ? 1 : 0);
-  const landingDay = dayIndex + offset;
-  return landingDay < days.length ? { dayIndex: landingDay, time: item.arrivalTime, flight: item } : null;
+  return { dayIndex, time: item.arrivalTime, flight: item };
 }
 
 /** Builds the editor from relative package days, with dated rows as a legacy fallback. */
