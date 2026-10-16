@@ -33,7 +33,7 @@ import {
   type ReviewDraft,
 } from "../lib/review-draft";
 import { feasibilityStorageKey, parseStashedFeasibility } from "../lib/feasibility-result";
-import { vibeLabelsFromTags } from "../lib/vibes";
+import { normalizeSeason, packageVibeLabels } from "../lib/vibes";
 import MarkdownText from "./markdown-text";
 import { supabase } from "../lib/supabase/client";
 
@@ -82,9 +82,11 @@ export default function ItineraryReview({
       ? null
       : parseWizardVibesDraft(window.sessionStorage.getItem(wizardVibesStorageKey(pkg.package_id)))
   ));
-  // The session draft only exists right after the wizard ran; on later visits
-  // the persisted tags carry the same vibe picks (see lib/vibes.ts).
-  const vibeLabels = vibesDraft?.vibes.length ? vibesDraft.vibes : vibeLabelsFromTags(pkg.tags);
+  // Saved vibes win; the session draft only covers packages whose vibes never
+  // reached the server (see lib/vibes.ts).
+  const savedVibeLabels = packageVibeLabels(pkg);
+  const seasonLabel = normalizeSeason(pkg.season) ?? vibesDraft?.season ?? null;
+  const vibeLabels = savedVibeLabels.length ? savedVibeLabels : vibesDraft?.vibes ?? [];
   const [reviewDraft, setReviewDraft] = useState<ReviewDraft>(() => {
     // A stored draft means the user already started editing this session —
     // resume it exactly, even if they cleared the description to empty.
@@ -334,7 +336,7 @@ export default function ItineraryReview({
             <div><dt>Destination</dt><dd>{destination}</dd></div>
             <div><dt>Duration</dt><dd>{days.length} Day{days.length === 1 ? "" : "s"} / {nights} Night{nights === 1 ? "" : "s"}</dd></div>
             <div><dt>Vibes</dt><dd>{vibeLabels.length ? vibeLabels.join(", ") : "Not set"}</dd></div>
-            <div><dt>Season</dt><dd>{vibesDraft?.season ? capitalize(vibesDraft.season) : "Not set"}</dd></div>
+            <div><dt>Season</dt><dd>{seasonLabel ? capitalize(seasonLabel) : "Not set"}</dd></div>
             <div><dt>Flights</dt><dd>{componentCounts.flightCount}</dd></div>
             <div><dt>Hotels</dt><dd>{componentCounts.hotelCount}</dd></div>
             <div><dt>Activities</dt><dd>{componentCounts.activityCount}</dd></div>

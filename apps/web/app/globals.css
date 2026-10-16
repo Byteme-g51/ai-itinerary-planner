@@ -729,16 +729,6 @@ body {
   font-weight: 700;
 }
 .admin-detail-facts dd { margin: 3px 0 0; font-size: 14px; line-height: 20px; font-weight: 600; overflow-wrap: anywhere; }
-.admin-detail-tags { margin: 22px 0 0; padding: 0; display: flex; flex-wrap: wrap; gap: 8px; list-style: none; }
-.admin-detail-tags li {
-  padding: 5px 9px;
-  border-radius: 999px;
-  background: var(--fc-info-subtle);
-  color: var(--fc-blue-hover);
-  font-size: 12px;
-  line-height: 16px;
-  font-weight: 600;
-}
 
 .admin-detail-itinerary { overflow: hidden; }
 .admin-detail-section-heading { padding: 24px 24px 18px; }

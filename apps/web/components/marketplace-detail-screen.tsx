@@ -8,7 +8,7 @@ import { supabase } from "../lib/supabase/client";
 import { formatTripLength, initials, planItineraryPhotos } from "../lib/marketplace-detail";
 import { buildDaysFromPackage, type TimelineItem } from "../lib/itinerary-builder";
 import { dateAfter, pickFlightLegs } from "../lib/booking-options";
-import { vibeLabelsFromTags } from "../lib/vibes";
+import { packageVibeLabels } from "../lib/vibes";
 import MarkdownText from "./markdown-text";
 import type { CreatorPackageDetail } from "../lib/creator-api";
 
@@ -603,7 +603,6 @@ export function PackageDetailView({
   const destination = [pkg.destination_city, pkg.destination_country].filter(Boolean).join(", ");
   const tripLength = formatTripLength(pkg.duration_days);
   const days = pkg.days ?? [];
-  const tags = pkg.tags ?? [];
 
   const timelineInput: CreatorPackageDetail = {
     package_id: pkg.package_id,
@@ -651,10 +650,10 @@ export function PackageDetailView({
     ? primaryHotel.check_out_day - primaryHotel.check_in_day
     : null;
   const season = pkg.season ?? SEASON_BY_PACKAGE[pkg.package_id ?? ""] ?? null;
-  // The vibe comes from the six wizard picks — persisted on the package as
-  // vibe ids/engine keywords in `tags` (see lib/vibes.ts). suitable_for is the
+  // The vibe comes from the six wizard picks — saved on the package in
+  // `vibes` (see lib/vibes.ts). suitable_for is the
   // audience field ("couples, first-timers"), not a vibe, so it isn't used here.
-  const vibeLabel = vibeLabelsFromTags(pkg.tags).join(" & ") || null;
+  const vibeLabel = packageVibeLabels(pkg).join(" & ") || null;
 
   // Anchor the return date to the real gap between the seeded flight legs —
   // junction day_number can disagree with the actual departure dates (the
@@ -971,17 +970,6 @@ export function PackageDetailView({
                 <p style={{ margin: "4px 0 0", fontSize: 12, color: color.textSecondary }}>
                   {[hotelNights ? `${hotelNights} nights` : null, primaryHotel?.hotel_name].filter(Boolean).join(" · ")}
                 </p>
-              </div>
-            )}
-
-            {tags.length > 0 && (
-              <div>
-                <p style={{ ...eyebrowStyle, marginBottom: 12 }}>Themes</p>
-                <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-                  {tags.map((tag) => (
-                    <span key={tag} style={{ padding: "6px 12px", borderRadius: radius.pill, border: `1px solid ${color.border}`, background: color.surface, fontSize: 13, color: color.textSecondary }}>{tag.charAt(0).toUpperCase() + tag.slice(1)}</span>
-                  ))}
-                </div>
               </div>
             )}
 

@@ -9,6 +9,8 @@ export type MarketplacePackageSummary = {
   base_price_aud: number | null;
   cover_image_url: string | null;
   tags: string[];
+  vibes?: string[];
+  season?: string | null;
   influencer: {
     avatar_url?: string | null;
     display_name: string | null;

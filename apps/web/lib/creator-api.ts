@@ -134,6 +134,7 @@ export type CreatorPackageDetail = {
   description?: string | null;
   max_group_size?: number | null;
   season?: string | null;
+  vibes?: string[];
   suitable_for?: string | null;
   tags?: string[];
   status?: string;
@@ -316,9 +317,10 @@ export type CreatePackageInput = {
   duration_days: number;
   base_price_aud: number;
   max_group_size?: number | null;
-  // Accepted by POST /packages (TravelPackageCreate.tags) — the wizard sends
-  // the picked vibe ids so the package keeps them past session storage.
-  tags?: string[];
+  // Dedicated columns (migration 0015): vibe ids and one season, validated by
+  // the API against fixed lists (lib/vibes.ts).
+  vibes?: string[];
+  season?: string | null;
   flights?: FlightInput[];
   hotels?: HotelInput[];
   activities?: ActivityInput[];
@@ -335,7 +337,9 @@ export type UpdatePackageInput = {
   destination_city?: string;
   duration_days?: number;
   max_group_size?: number;
-  tags?: string[];
+  // Omitted keeps the stored value; [] / null clears it.
+  vibes?: string[];
+  season?: string | null;
   days?: PackageDayInput[];
   flights?: FlightInput[];
   hotels?: HotelInput[];

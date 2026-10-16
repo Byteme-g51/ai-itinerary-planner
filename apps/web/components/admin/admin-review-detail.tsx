@@ -1,11 +1,11 @@
 "use client";
 
+import { packageVibeLabels } from "../../lib/vibes";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 
 import MarkdownText from "../markdown-text";
-import { VIBES } from "../../lib/vibes";
 
 import {
   AdminApiError,
@@ -210,12 +210,6 @@ function ExpandableDescription({ text }: { text: string }) {
   );
 }
 
-/** Display names for the package's `vibes` column (ids such as "foodie"), in the wizard's order. */
-function vibeNames(vibes: readonly string[] | undefined): string[] {
-  const wanted = new Set((vibes ?? []).map((value) => value.trim().toLowerCase()));
-  return VIBES.filter((vibe) => wanted.has(vibe.id) || wanted.has(vibe.label.toLowerCase())).map((vibe) => vibe.label);
-}
-
 function Cover({ pkg }: { pkg: AdminPackageDetail }) {
   return (
     <section className="admin-detail-cover" aria-labelledby="admin-detail-overview-title">
@@ -237,17 +231,12 @@ function Cover({ pkg }: { pkg: AdminPackageDetail }) {
         {pkg.description?.trim()
           ? <ExpandableDescription text={pkg.description} />
           : <p>No package description was provided.</p>}
-        {pkg.tags?.length ? (
-          <ul className="admin-detail-tags" aria-label="Package tags">
-            {pkg.tags.map((tag) => <li key={tag}>{tag}</li>)}
-          </ul>
-        ) : null}
       </div>
       </div>
       <dl className="admin-detail-facts">
         <div><dt>Destination</dt><dd>{formatAdminDestination(pkg)}</dd></div>
         <div><dt>Duration</dt><dd>{formatAdminDuration(pkg.duration_days)}</dd></div>
-        <div><dt>Vibe</dt><dd>{vibeNames(pkg.vibes).join(" · ") || "Not provided"}</dd></div>
+        <div><dt>Vibe</dt><dd>{packageVibeLabels(pkg).join(" · ") || "Not provided"}</dd></div>
         <div><dt>Season</dt><dd>{pkg.season || "Not provided"}</dd></div>
       </dl>
     </section>

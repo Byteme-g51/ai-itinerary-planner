@@ -1,9 +1,7 @@
 /**
  * The six vibes offered at itinerary generation — the single source for ids
- * and display labels. The wizard stores the picked ids in
- * `travel_packages.tags` (no dedicated column exists), so every reader
- * normalizes stored tags through `vibeLabelsFromTags` rather than rendering
- * raw tag strings.
+ * and display labels. Packages store the picked ids in
+ * `travel_packages.vibes` (and the season in `season`); `tags` is not used.
  */
 export const VIBES = [
   { id: "chill",      label: "Chill",            desc: "Spa days, yoga sessions, and slow-paced downtime",          img: "https://images.unsplash.com/photo-1602002418816-5c0aeef426aa?w=600&h=320&fit=crop" },
@@ -16,29 +14,29 @@ export const VIBES = [
 
 export type VibeId = (typeof VIBES)[number]["id"];
 
-/**
- * Stored tag -> vibe id. Ids map to themselves; "food" and "culture" are the
- * engine's theme keywords for foodie/local (VIBE_TO_KEYWORD in
- * lib/ai/itinerary.ts) — older packages carry those in tags instead of ids.
- */
-const TAG_TO_VIBE: Record<string, VibeId> = {
-  chill: "chill",
-  adventure: "adventure",
-  luxury: "luxury",
-  local: "local",
-  foodie: "foodie",
-  scenic: "scenic",
-  food: "foodie",
-  culture: "local",
-};
+export const SEASONS = ["spring", "summer", "autumn", "winter"] as const;
+export type SeasonId = (typeof SEASONS)[number];
 
-/** Canonical labels for the vibes a package's tags express, in VIBES order. */
-export function vibeLabelsFromTags(tags: readonly string[] | null | undefined): string[] {
-  if (!tags?.length) return [];
+/** Season the API accepts, or null for anything else. */
+export function normalizeSeason(value: string | null | undefined): SeasonId | null {
+  const id = value?.trim().toLowerCase();
+  return SEASONS.find((season) => season === id) ?? null;
+}
+
+/** Vibe ids from display labels or ids ("Local Experience" -> "local"), in VIBES order, deduped. */
+export function vibeIdsFromLabels(values: readonly string[] | null | undefined): VibeId[] {
+  if (!values?.length) return [];
   const ids = new Set<VibeId>();
-  for (const tag of tags) {
-    const id = TAG_TO_VIBE[tag.trim().toLowerCase()];
-    if (id) ids.add(id);
+  for (const value of values) {
+    const key = value.trim().toLowerCase();
+    const match = VIBES.find((vibe) => vibe.id === key || vibe.label.toLowerCase() === key);
+    if (match) ids.add(match.id);
   }
-  return VIBES.filter((v) => ids.has(v.id)).map((v) => v.label);
+  return VIBES.filter((vibe) => ids.has(vibe.id)).map((vibe) => vibe.id);
+}
+
+/** Display labels for a saved package's `vibes` column, in VIBES order. */
+export function packageVibeLabels(pkg: { vibes?: readonly string[] | null }): string[] {
+  const ids = vibeIdsFromLabels(pkg.vibes);
+  return VIBES.filter((vibe) => ids.includes(vibe.id)).map((vibe) => vibe.label);
 }
