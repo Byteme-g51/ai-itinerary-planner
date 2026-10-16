@@ -28,8 +28,10 @@ and all suggestion snapshots in one transaction.
 
 ## Conversation and retrieval
 
-One package has one conversation. Read the current saved package and the latest
-four completed turns; persist resolved destination/type/budget/category/style for
+One package has one conversation. Read the current saved package (including each
+activity's day, name, start time and duration, read from `package_activities.details`
+because the editor stores them there, so the model can apply R1, R5 and R13) and
+the latest four completed turns; persist resolved destination/type/budget/category/style for
 short follow-ups. Concurrent turns use the completed history visible when each
 request reads it; no ordering between concurrent requests is promised. Clients
 should submit conversational turns sequentially.
@@ -74,7 +76,10 @@ not DNS resolution or the entire response body. Vercel cold starts, platform que
 authentication and database outages can exceed it. `response_time_ms` measures time
 from authentication start to just before persistence; `total_ms` in logs includes
 saving. Logs also record retrieval time, provider/model, token counts and fallback
-exception class, without prompts, keys or provider error bodies. Inventory retrieval
+exception class, without prompts, keys or provider error bodies. A failed Supabase
+call logs `[copilot-db]` with the operation, table, HTTP status and PostgREST error
+code (for example `42703`, undefined column), never the error message, which can
+quote row values. Inventory retrieval
 or persistence failure returns `502`/`503`; no unfinished background tasks are used.
 
 ## Rollout and verification
