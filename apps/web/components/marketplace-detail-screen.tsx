@@ -5,10 +5,11 @@ import { useRouter } from "next/navigation";
 
 import { fetchMarketplacePackage, type MarketplacePackageDetail, type MarketplaceReview } from "../lib/marketplace-api";
 import { supabase } from "../lib/supabase/client";
-import { assignDayImages, buildStopImages, formatTripLength, initials } from "../lib/marketplace-detail";
+import { formatTripLength, initials, mosaicLayout, planItineraryPhotos } from "../lib/marketplace-detail";
 import { buildDaysFromPackage, type TimelineItem } from "../lib/itinerary-builder";
 import { dateAfter, pickFlightLegs } from "../lib/booking-options";
-import { vibeLabelsFromTags } from "../lib/vibes";
+import { packageVibeLabels } from "../lib/vibes";
+import MarkdownText from "./markdown-text";
 import type { CreatorPackageDetail } from "../lib/creator-api";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
@@ -351,8 +352,9 @@ function StopIcon({ name, size = 20, stroke = color.textPrimary }: { name: Timel
 }
 
 // Up to 6 photos per stop. One photo shows as a single landscape tile; more
-// than one shows as a mosaic (one large + up to two small), with a "+N"
-// overlay when there are more than fit. Every tile opens the lightbox.
+// than one shows as a mosaic (see mosaicLayout: two equal tiles, or one large
+// + two small), with a "+N" overlay when there are more than fit. Every tile
+// opens the lightbox.
 function StopPhotoGrid({ images, onOpen }: { images: string[]; onOpen: (images: string[], index: number) => void }) {
   const shown = images.slice(0, 6);
   if (shown.length === 0) return null;
@@ -369,14 +371,15 @@ function StopPhotoGrid({ images, onOpen }: { images: string[]; onOpen: (images: 
 
   const visible = shown.slice(0, 3);
   const extra = shown.length - visible.length;
+  const layout = mosaicLayout(shown.length);
   return (
-    <div style={{ width: 320, height: 200, flexShrink: 0, display: "grid", gridTemplateColumns: "1.4fr 1fr", gridTemplateRows: "1fr 1fr", gap: 2, borderRadius: radius.sm, overflow: "hidden" }}>
+    <div style={{ width: 320, height: 200, flexShrink: 0, display: "grid", gridTemplateColumns: layout.columns, gridTemplateRows: "1fr 1fr", gap: 2, borderRadius: radius.sm, overflow: "hidden" }}>
       {visible.map((src, i) => (
         <button
           key={i}
           type="button"
           onClick={() => onOpen(shown, i)}
-          style={{ ...tileButtonStyle, gridColumn: i === 0 ? "1" : "2", gridRow: i === 0 ? "1 / 3" : i === 1 ? "1" : "2" }}
+          style={{ ...tileButtonStyle, gridColumn: layout.tiles[i].column, gridRow: layout.tiles[i].row }}
         >
           <img src={src} alt="Example photo" style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover" }} />
           {i === visible.length - 1 && extra > 0 && (
@@ -602,8 +605,6 @@ export function PackageDetailView({
   const destination = [pkg.destination_city, pkg.destination_country].filter(Boolean).join(", ");
   const tripLength = formatTripLength(pkg.duration_days);
   const days = pkg.days ?? [];
-  const dayImages = assignDayImages(days.length, media);
-  const tags = pkg.tags ?? [];
 
   const timelineInput: CreatorPackageDetail = {
     package_id: pkg.package_id,
@@ -614,9 +615,36 @@ export function PackageDetailView({
     flights: pkg.flights ?? [],
     hotels: pkg.hotels ?? [],
     activities: pkg.activities ?? [],
-    days: days.map((d) => ({ id: d.id ?? null, day_number: d.day_number ?? null, title: d.title ?? null, summary: d.summary ?? null })),
+    days: days.map((d) => ({
+      id: d.id ?? null,
+      day_number: d.day_number ?? null,
+      title: d.title ?? null,
+      summary: d.summary ?? null,
+      media_ids: (d as { media_ids?: string[] }).media_ids,
+    })),
+    // Lets the builder resolve each day's and stop's media_ids to real photos.
+    media: media.flatMap((item) => {
+      const url = "media_url" in item ? item.media_url || item.url : item.url;
+      return item.media_id && url ? [{ media_id: item.media_id, url, caption: null }] : [];
+    }),
   };
   const builderDays = buildDaysFromPackage(timelineInput);
+
+  // A card for every day of the trip, not only the days that have a saved row —
+  // a package saved with fewer rows than days would otherwise end mid-trip.
+  const dayCount = Math.max(days.length, pkg.duration_days ?? 0);
+  const dayCards = Array.from({ length: dayCount }, (_, index) => {
+    const number = index + 1;
+    const row = days.find((d) => d.day_number === number) ?? (days[index]?.day_number == null ? days[index] : undefined);
+    return {
+      day: { id: row?.id ?? `day-${number}`, day_number: number, title: row?.title ?? null, summary: row?.summary ?? null },
+      items: builderDays[index]?.items ?? [],
+      builder: builderDays[index],
+    };
+  });
+  const photoPlan = planItineraryPhotos(dayCards.map((card) => card.builder ?? { items: [] }), media.map((item) => ({
+    url: item.url, media_url: "media_url" in item ? item.media_url : undefined, sort_order: "sort_order" in item ? item.sort_order : undefined,
+  })), cover);
 
   const { outbound: outboundFlight, returnLeg: returnFlight } = pickFlightLegs(pkg.flights);
   const primaryHotel = pkg.hotels?.[0] ?? null;
@@ -624,10 +652,10 @@ export function PackageDetailView({
     ? primaryHotel.check_out_day - primaryHotel.check_in_day
     : null;
   const season = pkg.season ?? SEASON_BY_PACKAGE[pkg.package_id ?? ""] ?? null;
-  // The vibe comes from the six wizard picks — persisted on the package as
-  // vibe ids/engine keywords in `tags` (see lib/vibes.ts). suitable_for is the
+  // The vibe comes from the six wizard picks — saved on the package in
+  // `vibes` (see lib/vibes.ts). suitable_for is the
   // audience field ("couples, first-timers"), not a vibe, so it isn't used here.
-  const vibeLabel = vibeLabelsFromTags(pkg.tags).join(" & ") || null;
+  const vibeLabel = packageVibeLabels(pkg).join(" & ") || null;
 
   // Anchor the return date to the real gap between the seeded flight legs —
   // junction day_number can disagree with the actual departure dates (the
@@ -704,26 +732,39 @@ export function PackageDetailView({
   return (
     <main style={{ background: color.surface, minHeight: "100vh", color: color.textPrimary }}>
       <div style={{ width: "min(calc(100% - 48px), 1280px)", margin: "0 auto", padding: "0 0 96px" }}>
-        {previewLabel && <div className="creator-preview-notice" role="status" style={{ margin: "24px 0" }}><strong>{previewLabel}</strong><span>Only you can view this package until it is published.</span></div>}
-
-        <HeroOverlay image={cover} alt={pkg.title} height={560} fullBleed overlayTop={
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-            <button
-              type="button"
-              onClick={onBack}
-              style={{
-                display: "inline-flex", alignItems: "center", gap: 8,
-                border: "none", borderRadius: radius.pill, padding: "10px 16px",
-                background: "rgba(255,255,255,0.94)", color: color.textPrimary,
-                fontSize: 14, fontWeight: 600, cursor: "pointer",
-                boxShadow: "0 2px 8px rgba(0,0,0,0.2)", backdropFilter: "blur(6px)",
-              }}
-            >
+        {previewLabel && (
+          // Sticky so there is always a way out: the in-hero button below scrolls away with the photo.
+          <div className="creator-preview-bar">
+            <button type="button" className="creator-preview-bar__back" onClick={onBack}>
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                <path d="M19 12H5M12 19l-7-7 7-7"/>
+                <path d="M19 12H5M12 19l-7-7 7-7" />
               </svg>
               {backLabel}
             </button>
+            <div className="creator-preview-notice" role="status"><strong>{previewLabel}</strong><span>Only you can view this package until it is published.</span></div>
+          </div>
+        )}
+
+        <HeroOverlay image={cover} alt={pkg.title} height={560} fullBleed overlayTop={
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            {!previewLabel ? (
+              <button
+                type="button"
+                onClick={onBack}
+                style={{
+                  display: "inline-flex", alignItems: "center", gap: 8,
+                  border: "none", borderRadius: radius.pill, padding: "10px 16px",
+                  background: "rgba(255,255,255,0.94)", color: color.textPrimary,
+                  fontSize: 14, fontWeight: 600, cursor: "pointer",
+                  boxShadow: "0 2px 8px rgba(0,0,0,0.2)", backdropFilter: "blur(6px)",
+                }}
+              >
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M19 12H5M12 19l-7-7 7-7"/>
+                </svg>
+                {backLabel}
+              </button>
+            ) : <span />}
             {!previewLabel && (
               <button
                 type="button"
@@ -765,7 +806,7 @@ export function PackageDetailView({
                 {pkg.description && (
                   <>
                     <SectionTitle>About this journey</SectionTitle>
-                    <p style={{ margin: "16px 0 0", fontSize: 18, lineHeight: 1.6, color: color.textSecondary, maxWidth: 720 }}>{pkg.description}</p>
+                    <MarkdownText text={pkg.description} style={{ margin: "16px 0 0", fontSize: 18, lineHeight: 1.6, color: color.textSecondary, maxWidth: 720 }} />
                   </>
                 )}
                 {!previewLabel && (
@@ -810,12 +851,12 @@ export function PackageDetailView({
               <section style={{ paddingTop: 48 }}>
                 <p style={eyebrowStyle}>Included in this trip</p>
                 <div style={{
-                  display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+                  display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))",
                   borderTop: `1px solid ${color.border}`, borderBottom: `1px solid ${color.border}`,
                   marginTop: 16,
                 }}>
                   {includedItems.map((item) => (
-                    <div key={item.label} style={{ padding: "20px 24px 20px 0" }}>
+                    <div key={item.label} style={{ padding: "20px 16px 20px 0" }}>
                       {/* Icon centers on the label+value pair — the optional sub hangs
                           below as a footnote, so short items don't leave the icon drooping. */}
                       <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
@@ -861,17 +902,16 @@ export function PackageDetailView({
 
             <section style={{ paddingTop: 48, display: "flex", flexDirection: "column", gap: 24 }}>
               <SectionTitle>Day by day</SectionTitle>
-              {days.length > 0 ? days.map((day, index) => {
+              {dayCards.length > 0 ? dayCards.map(({ day, items: dayItems }, index) => {
                 const key = day.id || String(day.day_number ?? index);
-                const dayItems = builderDays[index]?.items ?? [];
                 return (
                   <DayCard
                     key={key}
                     day={day}
                     index={index}
-                    image={dayImages[index]}
+                    image={photoPlan.dayImages[index]}
                     items={dayItems}
-                    stopImages={buildStopImages(dayItems.length, media)}
+                    stopImages={photoPlan.stopImages[index] ?? []}
                     expanded={expandedDays.has(key)}
                     onToggle={() => toggleDay(key)}
                     onOpenPhoto={(images, photoIndex) => setLightbox({ images, index: photoIndex })}
@@ -932,17 +972,6 @@ export function PackageDetailView({
                 <p style={{ margin: "4px 0 0", fontSize: 12, color: color.textSecondary }}>
                   {[hotelNights ? `${hotelNights} nights` : null, primaryHotel?.hotel_name].filter(Boolean).join(" · ")}
                 </p>
-              </div>
-            )}
-
-            {tags.length > 0 && (
-              <div>
-                <p style={{ ...eyebrowStyle, marginBottom: 12 }}>Themes</p>
-                <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-                  {tags.map((tag) => (
-                    <span key={tag} style={{ padding: "6px 12px", borderRadius: radius.pill, border: `1px solid ${color.border}`, background: color.surface, fontSize: 13, color: color.textSecondary }}>{tag.charAt(0).toUpperCase() + tag.slice(1)}</span>
-                  ))}
-                </div>
               </div>
             )}
 

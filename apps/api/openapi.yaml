@@ -40,9 +40,9 @@ info:
     Error responses use `ErrorResponse`, except user-management upstream failures, which return an `error` string.
     All monetary values are stored and returned as **whole AUD dollars** (integer), matching the database columns.
 
-  version: "2.7.0"
+  version: "2.9.0"
   license:
-    name: Academic Use Only
+    name: Proprietary, all rights reserved
 
 servers:
   - url: http://localhost:8000
@@ -563,6 +563,18 @@ components:
           nullable: true
           example: "summer"
 
+    FeasibilityIssue:
+      type: object
+      required: [affected_item, message]
+      properties:
+        error_code: {type: string, maxLength: 64}
+        rule: {type: string, maxLength: 64}
+        severity: {type: string, enum: [error, warning]}
+        field: {type: string, nullable: true, maxLength: 200}
+        field_value: {type: string, nullable: true, maxLength: 500}
+        affected_item: {type: string, maxLength: 300}
+        message: {type: string, maxLength: 1000}
+        action: {type: string, maxLength: 1000}
     TravelPackageDetail:
       allOf:
         - $ref: '#/components/schemas/TravelPackageSummary'
@@ -574,6 +586,13 @@ components:
             max_group_size:
               type: integer
               nullable: true
+            latest_feasibility:
+              type: object
+              nullable: true
+              description: >-
+                Feasibility result the creator reported at submission (see the submit request).
+                Returned to the owner and read by admins; never present on the public marketplace detail.
+              additionalProperties: true
             tags:
               type: array
               items:
@@ -876,11 +895,11 @@ components:
           type: string
           example: "The Layar Private Villas"
         star_rating:
-          type: integer
+          type: number
           minimum: 1
           maximum: 5
           nullable: true
-          example: 5
+          example: 4.9
         city:
           type: string
           example: "Seminyak, Bali"
@@ -2290,6 +2309,36 @@ paths:
                   maxLength: 500
                   description: Optional note from the influencer to the reviewing admin.
                   example: "Prices verified against Qantas.com.au as of today. Cover photo is original content."
+                feasibility_result:
+                  type: object
+                  nullable: true
+                  description: >-
+                    The feasibility check result the creator's editor produced before submitting,
+                    stored as `latest_feasibility` for the admin review page. Calculated in the
+                    browser, so it is informational and not verified. Omit it to clear a previous result.
+                  required: [is_feasible, hard_errors, soft_warnings, checked_at]
+                  properties:
+                    quality_score:
+                      type: integer
+                      nullable: true
+                      minimum: 0
+                      maximum: 100
+                    is_feasible:
+                      type: boolean
+                    hard_errors:
+                      type: array
+                      maxItems: 50
+                      items:
+                        $ref: "#/components/schemas/FeasibilityIssue"
+                    soft_warnings:
+                      type: array
+                      maxItems: 50
+                      items:
+                        $ref: "#/components/schemas/FeasibilityIssue"
+                    checked_at:
+                      type: string
+                      maxLength: 40
+                      description: ISO-8601 timestamp of when the check ran.
       responses:
         "200":
           description: Package submitted. Status is now `pending_review`.
@@ -2327,6 +2376,8 @@ paths:
       description: |
         Returns a paginated list of packages in `pending_review` status, ordered by
         `submitted_at` ascending (oldest submissions first, to prevent starvation).
+        With `view=decided`, returns packages already through review
+        (`approved`, `rejected`, `live`), ordered newest decision first.
 
         **Roles:** `admin`
         **FR:** FR-A-100
@@ -2340,6 +2391,12 @@ paths:
             type: string
             enum: [submitted_at_asc, submitted_at_desc]
             default: submitted_at_asc
+        - name: view
+          in: query
+          schema:
+            type: string
+            enum: [pending, decided]
+            default: pending
       responses:
         "200":
           description: Packages awaiting review.
@@ -2358,6 +2415,38 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         "403":
           $ref: '#/components/responses/Forbidden'
+
+  /approvals/{package_id}:
+    delete:
+      tags: [approvals]
+      summary: Delete a reviewed package
+      description: |
+        Permanently deletes a package and its associated records. Only packages
+        already through review (`approved`, `rejected`, `live`) may be deleted —
+        `pending_review` submissions stay in the queue and `draft` packages stay
+        with their creator.
+
+        **Roles:** `admin`
+        **FR:** FR-A-101
+      operationId: deleteReviewedPackage
+      responses:
+        "204":
+          description: Package deleted successfully. No response body.
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "403":
+          $ref: '#/components/responses/Forbidden'
+        "404":
+          $ref: '#/components/responses/NotFound'
+        "409":
+          description: Package is not in a deletable state.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error_code: "INVALID_STATUS_TRANSITION"
+                message: "Cannot delete a package in status 'pending_review'; it must be 'approved', 'rejected' or 'live'."
 
   /approvals/{package_id}/approve:
     parameters:

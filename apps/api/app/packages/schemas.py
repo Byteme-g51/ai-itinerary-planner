@@ -1,9 +1,9 @@
 import re
 from datetime import date, datetime
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, BeforeValidator, Field, ValidationError, model_validator
 
 Vibe = Literal["chill", "adventure", "luxury", "local", "foodie", "scenic"]
 Season = Literal["spring", "summer", "autumn", "winter"]
@@ -70,7 +70,8 @@ class FlightInput(BaseModel):
 
 class HotelInput(BaseModel):
     hotel_name: str
-    star_rating: int | None = Field(default=None, ge=1, le=5)
+    # Catalog hotels are rated like 4.9 (hotels.star_rating is FLOAT8).
+    star_rating: float | None = Field(default=None, ge=1, le=5)
     city: str
     address: str | None = None
     check_in_date: date | None = None
@@ -210,8 +211,71 @@ class TravelPackageUpdate(BaseModel):
         return self
 
 
+def _clip(limit: int):
+    """Long text is cut, not rejected: the result is informational, so a verbose
+    message must never block a creator from submitting."""
+
+    def clip(value: Any) -> Any:
+        return value[:limit] if isinstance(value, str) else value
+
+    return BeforeValidator(clip)
+
+
+def _first(limit: int):
+    def first(value: Any) -> Any:
+        return value[:limit] if isinstance(value, list) else value
+
+    return BeforeValidator(first)
+
+
+def _score(value: Any) -> Any:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return max(0, min(100, round(value)))
+
+
+class FeasibilityIssueIn(BaseModel):
+    """One rule hit from the creator's feasibility check (same shape as the
+    /api/ai/validate response). Bounded because the client supplies it."""
+
+    error_code: Annotated[str, _clip(64)] = ""
+    rule: Annotated[str, _clip(64)] = ""
+    severity: Literal["error", "warning"] = "warning"
+    field: Annotated[str, _clip(200)] | None = None
+    field_value: Annotated[str, _clip(500)] | None = None
+    affected_item: Annotated[str, _clip(300)]
+    message: Annotated[str, _clip(1000)]
+    action: Annotated[str, _clip(1000)] = ""
+
+
+class FeasibilityResultIn(BaseModel):
+    """What the creator's editor reported at submission. Calculated in the
+    browser, so it is stored for the admin to read but never trusted."""
+
+    quality_score: Annotated[int | None, BeforeValidator(_score)] = None
+    is_feasible: bool
+    hard_errors: Annotated[list[FeasibilityIssueIn], _first(50)] = Field(default_factory=list)
+    soft_warnings: Annotated[list[FeasibilityIssueIn], _first(50)] = Field(default_factory=list)
+    checked_at: Annotated[str, _clip(40)]
+
+
+def parse_feasibility_result(raw: Any) -> dict[str, Any] | None:
+    """The creator-reported result as a clean dict, or None when absent or too
+    malformed to keep. Never raises: it is informational, so it must not be
+    able to block a submission."""
+    if not raw:
+        return None
+    try:
+        return FeasibilityResultIn.model_validate(raw).model_dump(exclude_none=True)
+    except ValidationError:
+        return None
+
+
 class SubmitBody(BaseModel):
     submission_note: str | None = Field(default=None, max_length=500)
+    # Kept loose here and validated in the route: a malformed result is dropped
+    # rather than failing the whole submission.
+    feasibility_result: Any | None = None
 
 
 class TravelPackageSummary(BaseModel):
@@ -347,6 +411,9 @@ class TravelPackageDetail(TravelPackageSummary):
     days: list[PackageDayOut] = []
     creator: PackageCreatorOut | None = None
     latest_approval: Any | None = None
+    # Creator-reported feasibility result (see FeasibilityResultIn); never
+    # present on the public marketplace detail.
+    latest_feasibility: dict[str, Any] | None = None
     pricing: PricingOut | None = None
 
 

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
-import { annotateItems, contentMatchesSavedSnapshot, deriveFlightType, findTimeConflict, flightForItem, isCreatorPickComplete, placeUnassociatedMedia, referenceFlightPresentation, removeItemPhotoFromDays } from "./itinerary-editor";
+import { annotateItems, contentMatchesSavedSnapshot, deriveFlightType, findTimeConflict, flightCardTimes, flightForItem, isCreatorPickComplete, placeUnassociatedMedia, referenceFlightPresentation, removeItemPhotoFromDays } from "./itinerary-editor";
 import type { BuilderDay, TimelineItem } from "../lib/itinerary-builder";
 
 function item(overrides: Partial<TimelineItem> & { id: number; time: string }): TimelineItem {
@@ -561,4 +561,57 @@ test("the day's main photo has a remove button wired to removeDayPhoto (DEV-163)
   const dayPhoto = source.match(/className="day-photo-single"[\s\S]*?<\/section>/)?.[0] ?? "";
 
   assert.match(dayPhoto, /remove-photo-btn[\s\S]*?removeDayPhoto/);
+});
+
+test("a flight card shows the end that anchors its day, and the other end underneath", () => {
+  // Regression: after #117 and #118 met, the card printed item.time after "from",
+  // and item.time is the landing for an arrival, so it read "05:44 · from 05:44".
+  const flight = (overrides: Partial<TimelineItem>) =>
+    item({ id: 1, type: "FLIGHT", icon: "plane", departureTime: "20:50", arrivalTime: "05:44", ...overrides, time: overrides.time ?? "05:44" });
+
+  assert.deepEqual(flightCardTimes(flight({ flightRole: "arrival" }), false), { main: "05:44", sub: "from 20:50" });
+  assert.deepEqual(flightCardTimes(flight({ flightRole: "arrival" }), true), { main: "05:44", sub: "Departs 20:50 the day before" });
+  assert.deepEqual(
+    flightCardTimes(flight({ flightRole: "departure", time: "21:00", departureTime: "21:00", arrivalTime: "08:00" }), false),
+    { main: "21:00", sub: "lands 08:00" },
+  );
+  // An older dated flight carries its landing in item.time whatever its role.
+  assert.deepEqual(
+    flightCardTimes(flight({ flightRole: "departure", time: "08:00", departureTime: "21:00", arrivalTime: "08:00" }), false),
+    { main: "21:00", sub: "lands 08:00" },
+  );
+
+  // A missing end: show the time there is, and no "from"/"lands" line repeating it.
+  assert.deepEqual(flightCardTimes(flight({ flightRole: "arrival", time: "09:00", departureTime: "10:00", arrivalTime: undefined }), false), { main: "10:00", sub: undefined });
+  assert.deepEqual(flightCardTimes(flight({ flightRole: "departure", time: "09:00", departureTime: undefined, arrivalTime: "14:00" }), false), { main: "14:00", sub: undefined });
+
+  // And the card renders from it rather than from item.time.
+  const source = readFileSync(new URL("./itinerary-editor.tsx", import.meta.url), "utf8");
+  assert.match(source, /const flightTimes = item\.type === "FLIGHT" \? flightCardTimes\(item,/);
+  assert.match(source, /\{flightTimes\?\.main \?\? item\.time\}/);
+});
+
+test("an overnight arrival flight ends at landing on its own day, so a stop after landing isn't a conflict", () => {
+  // Regression: SYD 22:00 -> BKK 07:31 on Day 1 read as occupying Day 1 until 22:00, so
+  // an 08:30 breakfast got "Must start at or after SYD to BKK ends, at 22:00".
+  const items = [
+    item({ id: 1, time: "22:00", departureTime: "22:00", arrivalTime: "07:31", duration: "571", type: "FLIGHT", title: "SYD to BKK" }),
+    item({ id: 2, time: "08:30", duration: "60", title: "Breakfast Near the Hotel" }),
+  ];
+  assert.equal(findTimeConflict(items, 2, "08:30", "60", 1), null, "stop after the overnight arrival");
+  assert.equal(findTimeConflict(items, 1, "22:00", "571", 1), null, "the flight itself");
+  assert.match(findTimeConflict(items, 2, "07:00", "60", 1) ?? "", /Must start at or after SYD to BKK ends, at 07:31/);
+  // Any other overnight flight (a return leg) still runs until its departure that day.
+  assert.match(findTimeConflict(items, 2, "08:30", "60") ?? "", /ends, at 22:00/);
+});
+
+test("on the landing day of an overnight arrival, the first stop gets the airport buffer, not a scheduling conflict", () => {
+  const items = [
+    item({ id: 1, time: "22:00", departureTime: "22:00", arrivalTime: "07:31", duration: "571", type: "FLIGHT", title: "SYD to BKK" }),
+    item({ id: 2, time: "08:30", duration: "60", title: "Breakfast Near the Hotel" }),
+  ];
+  const landing = { time: "07:31", departureTime: "22:00", bufferMin: 90, international: true, overnightFlightId: 1 };
+  const [flight, breakfast] = annotateItems(items, landing);
+  assert.notEqual(flight.problem, "Overlaps next item", "the flight landed at 07:31, it doesn't run past 08:30");
+  assert.equal(breakfast.problem, "Too soon after landing");
 });

@@ -451,6 +451,51 @@ test("flightArrivalDayOffset is 0 for a same-day flight and null when a time is 
   assert.equal(flightArrivalDayOffset(null, "Australia/Sydney", "2026-04-01T13:00:00Z", "Australia/Sydney"), null);
 });
 
+test("on a trip with both flights on the same day, the flight home is anchored by its take-off", () => {
+  const leg = (origin: string, destination: string, departure: string, arrival: string) => ({
+    flight_id: null, airline: "Qantas", flight_number: null, origin_iata: origin, destination_iata: destination,
+    cabin_class: null, price_aud: 200, departure_time: departure, arrival_time: arrival,
+    departure_datetime: null, arrival_datetime: null, day_number: 1,
+  });
+  const pkg: CreatorPackageDetail = {
+    package_id: "pkg-same-day",
+    title: "Melbourne Day Trip",
+    duration_days: 1,
+    days: [],
+    hotels: [],
+    activities: [],
+    flights: [leg("SYD", "MEL", "08:00", "09:30"), leg("MEL", "SYD", "19:00", "20:30")],
+  };
+  const flights = buildDaysFromPackage(pkg)[0].items.filter((entry) => entry.type === "FLIGHT");
+  assert.deepEqual(flights.map((entry) => [entry.title, entry.flightRole, entry.time]), [
+    ["SYD to MEL", "arrival", "09:30"],
+    ["MEL to SYD", "departure", "19:00"],
+  ]);
+
+  // Stored order isn't take-off order: the flight home listed first must not become "home".
+  const reversed = buildDaysFromPackage({ ...pkg, flights: [...pkg.flights].reverse() })[0].items
+    .filter((entry) => entry.type === "FLIGHT");
+  assert.deepEqual(reversed.map((entry) => [entry.title, entry.flightRole]), [
+    ["SYD to MEL", "arrival"],
+    ["MEL to SYD", "departure"],
+  ]);
+
+  // Mixed date formats still find the earliest take-off.
+  const mixed = buildDaysFromPackage({ ...pkg, flights: [
+    { ...pkg.flights[1] },
+    { ...pkg.flights[0], departure_time: null, departure_datetime: "2026-05-01T08:00:00+10:00", arrival_datetime: "2026-05-01T09:30:00+10:00" },
+  ] })[0].items.filter((entry) => entry.type === "FLIGHT");
+  assert.deepEqual(mixed.map((entry) => [entry.title, entry.flightRole]), [
+    ["SYD to MEL", "arrival"],
+    ["MEL to SYD", "departure"],
+  ]);
+
+  // A lone day-1 flight with no airport codes is still the arrival.
+  const [lone] = buildDaysFromPackage({ ...pkg, flights: [{ ...pkg.flights[0], origin_iata: null, destination_iata: null }] })[0].items
+    .filter((entry) => entry.type === "FLIGHT");
+  assert.equal(lone.flightRole, "arrival");
+});
+
 test("the AI day summary loads into the story textarea, not the day meta", () => {
   const pkg: CreatorPackageDetail = {
     package_id: "pkg-2",
@@ -1060,14 +1105,22 @@ test("arrivalLanding finds when and on which day the arrival flight lands", () =
   assert.deepEqual({ dayIndex, time }, { dayIndex: 0, time: "16:45" });
 });
 
-test("an overnight arrival flight lands on the next day", () => {
+test("an overnight arrival flight lands on the day it sits on — it left the evening before (Day 0)", () => {
+  // Regression: a 20:55–08:40 flight on Day 1 "landed on Day 2", so every Day 1
+  // activity read "Starts before your flight lands".
   const days = [
-    flightDay(1, [{ type: "FLIGHT", time: "22:00", departureTime: "22:00", arrivalTime: "06:30" }]),
+    flightDay(1, [{ type: "FLIGHT", time: "20:55", departureTime: "20:55", arrivalTime: "08:40" }]),
     flightDay(2, []),
     flightDay(3, [{ type: "FLIGHT", time: "18:00", departureTime: "18:00", arrivalTime: "23:30" }]),
   ];
-  const { dayIndex, time } = arrivalLanding(days)!;
-  assert.deepEqual({ dayIndex, time }, { dayIndex: 1, time: "06:30" });
+  const { dayIndex, time, overnight } = arrivalLanding(days)!;
+  assert.deepEqual({ dayIndex, time, overnight }, { dayIndex: 0, time: "08:40", overnight: true });
+});
+
+test("a same-day arrival flight is unchanged: it lands on its own day, not overnight", () => {
+  const days = [flightDay(1, [{ type: "FLIGHT", time: "08:00", departureTime: "08:00", arrivalTime: "10:00" }]), flightDay(2, [])];
+  const { dayIndex, time, overnight } = arrivalLanding(days)!;
+  assert.deepEqual({ dayIndex, time, overnight }, { dayIndex: 0, time: "10:00", overnight: false });
 });
 
 test("a lone flight on the last day is the trip home, not an arrival", () => {
@@ -1077,4 +1130,24 @@ test("a lone flight on the last day is the trip home, not an arrival", () => {
 
 test("no flights means no arrival landing", () => {
   assert.equal(arrivalLanding([flightDay(1, [])]), null);
+});
+
+test("an overnight arrival flight sorts by its landing, ahead of the day's stops; other flights by departure", () => {
+  // Regression: SYD 22:00 -> BKK 07:31 on Day 1 sorted below a 09:15 breakfast.
+  const flight = { id: 1, type: "FLIGHT", time: "22:00", departureTime: "22:00", arrivalTime: "07:31", title: "SYD to BKK", price: "", icon: "plane", status: "pass" } as any;
+  const breakfast = { id: 2, type: "ACTIVITY", time: "09:15", title: "Breakfast", price: "", icon: "star", status: "pass" } as any;
+  assert.deepEqual([breakfast, flight].sort((a, b) => compareDayItems(a, b, 1)).map((i) => i.id), [1, 2]);
+  assert.deepEqual([flight, breakfast].sort((a, b) => compareDayItems(a, b)).map((i) => i.id), [2, 1], "a return flight still sorts by departure");
+});
+
+test("package updates send the saved vibes and season, never tags", () => {
+  const pkg = {
+    package_id: "pkg-vibes", title: "Kyoto", duration_days: 1,
+    vibes: ["foodie", "scenic"], season: "autumn", tags: ["culture"],
+    flights: [], hotels: [], activities: [], days: [],
+  } as CreatorPackageDetail;
+  const update = buildPackageUpdate(pkg, [], "Kyoto");
+  assert.deepEqual(update.vibes, ["foodie", "scenic"]);
+  assert.equal(update.season, "autumn");
+  assert.equal("tags" in update, false);
 });

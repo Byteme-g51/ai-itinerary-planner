@@ -29,8 +29,7 @@ import {
   itineraryToPackageInput,
   type WizardSelection,
 } from "../lib/ai/itinerary";
-import { wizardVibesStorageKey } from "../lib/review-draft";
-import { VIBES } from "../lib/vibes";
+import { normalizeSeason, vibeIdsFromLabels, VIBES } from "../lib/vibes";
 import { supabase } from "../lib/supabase/client";
 import { creatorPackageRoute, creatorPackageShareRoute } from "../lib/routes";
 import { hasAdminApprovalAccess } from "../lib/admin-api";
@@ -160,7 +159,7 @@ function BtnSecondary({
 }
 
 // Brand wordmark: Travel Marketplace® and tagline
-function MarketplaceBrandLogo() {
+export function MarketplaceBrandLogo() {
   return (
     <div style={{ display: "flex", flexDirection: "column", justifyContent: "center", gap: 2 }}>
       <div style={{
@@ -489,11 +488,12 @@ export function LoginScreen({ onNav }: { onNav: (s: Screen) => void }) {
         {/* Email field — floating label style */}
         <form onSubmit={handleSubmit} style={{ display: "flex", flexDirection: "column", gap: 12 }}>
           <div style={{ position: "relative" }}>
-            <label style={{
+            <label htmlFor="login-email" style={{
               position: "absolute", top: -9, left: 12, background: C.white,
               padding: "0 4px", fontSize: 12, color: C.secondary, lineHeight: 1,
             }}>Email address *</label>
             <input
+              id="login-email"
               type="email" value={email}
               onChange={(e) => setEmail(e.target.value)}
               autoComplete="email"
@@ -2495,9 +2495,9 @@ export function AIWizardScreen({ onNav, initialStep = 0, requestedStep, stepRequ
             customDurationDays,
             season: season ?? "",
           }),
-          // Persist the raw vibe ids — tags is the only backend field that
-          // carries them (see lib/vibes.ts for the canonical list).
-          tags: vibes,
+          // Dedicated columns, validated by the API (see lib/vibes.ts).
+          vibes: vibeIdsFromLabels(vibes),
+          season: normalizeSeason(season),
         };
         const { package_id } = await createPackage(
           timeoutFetch,
@@ -2511,20 +2511,6 @@ export function AIWizardScreen({ onNav, initialStep = 0, requestedStep, stepRequ
         if (inFlightSetupRef.current === runSetup) {
           setCreatedPackageId(package_id);
           setGenerationComplete(true);
-        }
-        // Vibes/season have no backend field to persist to (not even proposed
-        // in the save/submit handover) — stashed here so the Finalise & Review
-        // page can still show them once, right after creation.
-        try {
-          window.sessionStorage.setItem(
-            wizardVibesStorageKey(package_id),
-            JSON.stringify({
-              vibes: vibes.map((vibeId) => VIBES.find((item) => item.id === vibeId)?.label ?? vibeId),
-              season,
-            }),
-          );
-        } catch {
-          // best-effort only
         }
       } catch (error) {
         if (inFlightSetupRef.current === runSetup) inFlightSetupRef.current = null;
@@ -2609,7 +2595,12 @@ export function AIWizardScreen({ onNav, initialStep = 0, requestedStep, stepRequ
         season: seasonOverride ?? "",
       });
       const description = `${styleLabels.length ? `A ${styleLabels.join(", ")} trip` : "A custom trip"}${seasonOverride ? `, built for ${seasonOverride}` : ", built from scratch"}.`;
-      const { package_id } = await createPackage(fetch, BUILDER_API_URL, accessToken, { ...base, description, tags: vibes });
+      const { package_id } = await createPackage(fetch, BUILDER_API_URL, accessToken, {
+        ...base,
+        description,
+        vibes: vibeIdsFromLabels(vibes),
+        season: normalizeSeason(seasonOverride),
+      });
       router.push(`/packages/editor/${encodeURIComponent(package_id)}`);
     } catch (error) {
       setCreateError(error instanceof Error ? error.message : "Unable to create this package.");

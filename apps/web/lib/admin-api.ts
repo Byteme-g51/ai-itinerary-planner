@@ -1,4 +1,5 @@
 import type { CreatorPackageDetail } from "./creator-api";
+import { parseSubmittedFeasibility, type SubmittedFeasibility } from "./feasibility-result";
 
 export type ApprovalSort = "submitted_at_asc" | "submitted_at_desc";
 
@@ -53,6 +54,7 @@ export type AdminApprovalRecord = {
   reviewer_id?: string;
   decision: "approved" | "rejected";
   rejection_reason?: string | null;
+  notes?: string | null;
   reviewed_at?: string;
 };
 
@@ -80,6 +82,8 @@ export type AdminPackageDetail = Omit<
   vibes?: string[];
   creator?: AdminPackageCreator | null;
   latest_approval?: AdminApprovalRecord | null;
+  /** What the creator's editor reported when submitting; absent for packages submitted before it was recorded. */
+  latest_feasibility?: SubmittedFeasibility | null;
   pricing?: AdminPackagePricing | null;
 };
 
@@ -164,17 +168,12 @@ function isDecisionResponse(value: unknown): value is AdminDecisionResponse {
     && (approval.decision === "approved" || approval.decision === "rejected");
 }
 
-export async function fetchPendingApprovals(
+async function fetchApprovals(
   fetcher: typeof fetch,
   apiUrl: string,
   token: string,
-  query: { page: number; perPage: number; sort: ApprovalSort },
+  params: URLSearchParams,
 ): Promise<ApprovalListResponse> {
-  const params = new URLSearchParams({
-    page: String(query.page),
-    per_page: String(query.perPage),
-    sort: query.sort,
-  });
   const response = await fetcher(`${apiBase(apiUrl)}/approvals?${params}`, {
     headers: { Authorization: `Bearer ${token}` },
   });
@@ -188,6 +187,51 @@ export async function fetchPendingApprovals(
     );
   }
   return body;
+}
+
+export async function fetchPendingApprovals(
+  fetcher: typeof fetch,
+  apiUrl: string,
+  token: string,
+  query: { page: number; perPage: number; sort: ApprovalSort },
+): Promise<ApprovalListResponse> {
+  return fetchApprovals(fetcher, apiUrl, token, new URLSearchParams({
+    page: String(query.page),
+    per_page: String(query.perPage),
+    sort: query.sort,
+  }));
+}
+
+export async function fetchReviewedApprovals(
+  fetcher: typeof fetch,
+  apiUrl: string,
+  token: string,
+  query: { page: number; perPage: number },
+): Promise<ApprovalListResponse> {
+  return fetchApprovals(fetcher, apiUrl, token, new URLSearchParams({
+    page: String(query.page),
+    per_page: String(query.perPage),
+    view: "decided",
+  }));
+}
+
+export async function deleteAdminPackage(
+  fetcher: typeof fetch,
+  apiUrl: string,
+  token: string,
+  packageId: string,
+): Promise<void> {
+  const response = await fetcher(
+    `${apiBase(apiUrl)}/approvals/${encodeURIComponent(packageId)}`,
+    { method: "DELETE", headers: { Authorization: `Bearer ${token}` } },
+  );
+  if (!response.ok) {
+    throw new AdminApiError(
+      await responseMessage(response, "Unable to delete this package."),
+      errorKind(response.status),
+      response.status,
+    );
+  }
 }
 
 export async function hasAdminApprovalAccess(
@@ -245,7 +289,10 @@ export async function fetchAdminPackage(
   if (!isAdminPackageDetail(body)) {
     throw new AdminApiError("Unable to load this package for review.", "request", response.status);
   }
-  return body;
+  // Client-supplied data: normalise it so a malformed value reads as "nothing recorded".
+  return "latest_feasibility" in body
+    ? { ...body, latest_feasibility: parseSubmittedFeasibility((body as { latest_feasibility?: unknown }).latest_feasibility) }
+    : body;
 }
 
 async function postDecision(

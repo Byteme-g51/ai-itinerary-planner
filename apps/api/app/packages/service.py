@@ -185,7 +185,11 @@ def get_public_package_detail(package_id):
         },
     )
     rows = response.json()
-    return _to_detail(rows[0]) if rows else None
+    if not rows:
+        return None
+    # Creator-reported and unverified: for the owner and admins only.
+    rows[0].pop("latest_feasibility", None)
+    return _to_detail(rows[0])
 
 
 def _flight_from_row(pf):
@@ -472,7 +476,7 @@ def update_package(package_id, headers, uid, payload):
 def delete_package(package_id, user_headers):
     select = (
         "status,package_flights(flight_id),package_hotels(hotel_id),"
-        "package_activities(activity_id)"
+        "package_activities(activity_id),package_media(url)"
     )
 
     def _resolve():
@@ -502,8 +506,37 @@ def delete_package(package_id, user_headers):
             return "not_found", None
         return "not_deletable", row.get("status")
 
-    # ponytail: spec says delete all associated records; catalog rows have no FK
-    # back to the package and would otherwise orphan.
+    _cleanup_orphaned_catalog_rows(row)
+    _delete_media_objects(row)
+    return "ok", None
+
+
+def _delete_media_objects(row):
+    """The cascade removes package_media rows, not their storage objects, which
+    would stay publicly readable. Best-effort, after the rows are gone: a
+    leftover object is tolerated, a row pointing at a missing file is not.
+    The bucket name is spelled out because media.service imports this module."""
+    paths = [
+        m["url"].split("/package-media/", 1)[1]
+        for m in row.get("package_media") or []
+        if "/package-media/" in (m.get("url") or "")
+    ]
+    if paths:
+        try:
+            requests.delete(
+                f"{core.SUPABASE_URL}/storage/v1/object/package-media",
+                json={"prefixes": paths},
+                headers=_admin_headers(),
+                timeout=15,
+            )
+        except RequestException:
+            pass
+
+
+def _cleanup_orphaned_catalog_rows(row):
+    """ponytail: spec says delete all associated records; catalog rows have no
+    FK back to the package and would otherwise orphan. Shared by the creator
+    draft-delete path and the admin decided-package delete."""
     for table, key in (
         ("flights", "flight_id"),
         ("hotels", "hotel_id"),
@@ -522,10 +555,9 @@ def delete_package(package_id, user_headers):
                 # Shared seeded catalog rows are FK-RESTRICTed by other packages;
                 # the package itself is already gone, so this is best-effort.
                 pass
-    return "ok", None
 
 
-def submit_package(package_id, headers, uid, note):
+def submit_package(package_id, headers, uid, note, feasibility=None):
     """Submit is a single atomic RPC: locks the owned package row before
     reading component counts/status (fixing the save/submit race), rather
     than reading components first and only locking for the status write.
@@ -536,7 +568,12 @@ def submit_package(package_id, headers, uid, note):
     result = _call(
         "post",
         "rpc/submit_package_for_review",
-        json={"p_actor_id": uid, "p_package_id": package_id, "p_note": note},
+        json={
+            "p_actor_id": uid,
+            "p_package_id": package_id,
+            "p_note": note,
+            "p_feasibility": feasibility,
+        },
         headers=_admin_headers(),
     ).json()
     outcome = result.get("outcome")
