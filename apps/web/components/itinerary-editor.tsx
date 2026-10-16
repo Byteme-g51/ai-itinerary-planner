@@ -53,6 +53,7 @@ import { APP_ROUTES } from "../lib/routes";
 import { iataOf } from "../lib/ai/itinerary";
 import { ACTIVITY_GAP_MIN, minutesToTime, TRANSFER_BUFFER_MIN } from "../lib/feasibility";
 import { supabase } from "../lib/supabase/client";
+import { feasibilityStorageKey, toSubmittedFeasibility } from "../lib/feasibility-result";
 import { baselineOf, liveView, localChecks, type LiveBaseline } from "../lib/live-feasibility";
 import Icon from "./icon";
 
@@ -187,6 +188,18 @@ function formatRelativeTime(fromMs: number, nowMs: number = Date.now()) {
 function parseIssueDay(field?: string): number | null {
   const match = field?.match(/^Day (\d+)/);
   return match ? Number(match[1]) : null;
+}
+
+// The card's big time is the end that anchors the day (flightRole), the small
+// line the other end. Reads departureTime/arrivalTime, never item.time, which
+// holds the anchor for package flights but the landing for older dated ones.
+export function flightCardTimes(item: TimelineItem, overnightArrival: boolean): { main: string; sub?: string } {
+  const { departureTime: takeOff, arrivalTime: landing } = item;
+  if (item.flightRole === "arrival") {
+    const sub = takeOff && landing ? (overnightArrival ? `Departs ${takeOff} the day before` : `from ${takeOff}`) : undefined;
+    return { main: landing || takeOff || item.time, sub };
+  }
+  return { main: takeOff || landing || item.time, sub: takeOff && landing ? `lands ${landing}` : undefined };
 }
 
 export function referenceFlightPresentation(item: TimelineItem) {
@@ -2083,8 +2096,18 @@ export default function ItineraryEditor({
       || extractClockTimeInZone(flight.departure_datetime ?? null, timezoneForIata(flight.origin_iata));
     const arrivalTime = flight.arrival_time
       || extractClockTimeInZone(flight.arrival_datetime ?? null, timezoneForIata(flight.destination_iata));
+    // A flight added on day 1 is how the traveller arrives, so its landing
+    // anchors the day, unless it lands back where the trip's first flight left
+    // from (a day trip's flight home); anywhere else it is a flight out and the
+    // take-off does. Mirrors buildDaysFromPackage so a hand-added flight behaves
+    // exactly like a generated one.
+    const tripHome = days.flatMap((day) => day.items).find((entry) => entry.type === "FLIGHT")?.originIata;
+    const flightRole: "arrival" | "departure" =
+      activeDay === 0 && (!tripHome || flight.destination_iata !== tripHome) ? "arrival" : "departure";
+    const anchorTime = flightRole === "arrival" ? arrivalTime : departureTime;
     insertItem(addingAfter, {
-      time: departureTime ?? "09:00",
+      time: anchorTime ?? "09:00",
+      flightRole,
       type: "FLIGHT",
       title: [flight.origin_iata, flight.destination_iata].filter(Boolean).join(" to ") || flight.airline || "Flight",
       price: flight.price_aud != null ? `$${flight.price_aud.toLocaleString("en-US")}` : "$0",
@@ -2420,6 +2443,10 @@ export default function ItineraryEditor({
       // just approved here, without re-fetching (see review-draft.ts).
       try {
         window.sessionStorage.setItem(itinerarySnapshotStorageKey(pkg.package_id), JSON.stringify({ title: packageTitle, days }));
+        // The check that cleared this submission, for the review page to send with
+        // the submit request so the admin can see the score and suggestions.
+        const checked = toSubmittedFeasibility(feasResult, lastCheckedAt);
+        if (checked) window.sessionStorage.setItem(feasibilityStorageKey(pkg.package_id), JSON.stringify(checked));
       } catch {
         // best-effort only
       }
@@ -2683,6 +2710,7 @@ export default function ItineraryEditor({
                   ? `$${flight.price_aud.toLocaleString("en-AU")}`
                   : hotelTotal;
                 const isTimeValue = /^\d{1,2}:\d{2}/.test(item.time);
+                const flightTimes = item.type === "FLIGHT" ? flightCardTimes(item, landing?.overnight === true && landing.flight.id === item.id) : null;
                 const displayedPrice = referenceFlight?.price ?? itemPrice;
                 const isPriceValue = displayedPrice.startsWith("$");
                 const stayMarkerLabel = item.stayMarker === "check-in"
@@ -2701,8 +2729,8 @@ export default function ItineraryEditor({
                 <article className={`timeline-item ${scheduleConflict ? "critical" : item.status} ${draggedItemId === item.id ? "dragging" : ""} ${canExpand ? "editable" : ""} ${isExpanded ? "expanded" : ""}`} onClick={(event) => { if (!canExpand || (event.target as HTMLElement).closest("button")) return; toggleExpand(); }} onKeyDown={(event) => { if (!canExpand || (event.target as HTMLElement).closest("button")) return; if (event.key === "Enter" || event.key === " ") { event.preventDefault(); toggleExpand(); } }} tabIndex={canExpand ? 0 : undefined} role={canExpand ? "button" : undefined} aria-expanded={canExpand ? isExpanded : undefined}>
                   <button className="drag-handle" draggable aria-label={`Move ${hotelTitle}. Use drag and drop, or the up and down arrow keys.`} onDragStart={(event) => { setEditingItem(null); setDraggedItemId(item.id); event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/plain", String(item.id)); }} onDragEnd={endDrag} onKeyDown={(event) => { if (event.key === "ArrowUp") { event.preventDefault(); moveItem(index, index - 1); } if (event.key === "ArrowDown") { event.preventDefault(); moveItem(index, index + 1); } }}><span /><span /><span /><span /><span /><span /></button>
                   <div className="item-time">
-                    <div className="item-time-row"><Icon name={item.icon} /><strong className={isTimeValue ? undefined : "item-time-word"}>{item.type === "FLIGHT" && item.arrivalTime ? item.arrivalTime : item.time}</strong></div>
-                    {isTimeValue && item.type === "FLIGHT" && item.arrivalTime && <span className="item-time-end">{landing?.overnight && landing.flight.id === item.id ? `Departs ${item.time} the day before` : `from ${item.time}`}</span>}
+                    <div className="item-time-row"><Icon name={item.icon} /><strong className={isTimeValue ? undefined : "item-time-word"}>{flightTimes?.main ?? item.time}</strong></div>
+                    {isTimeValue && flightTimes?.sub && <span className="item-time-end">{flightTimes.sub}</span>}
                     {isTimeValue && item.type !== "FLIGHT" && item.duration && <span className="item-time-end">to {getEndTime(item.time, item.duration)}</span>}
                   </div>
                   <div className="item-copy">

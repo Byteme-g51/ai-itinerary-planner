@@ -185,6 +185,23 @@ def test_hotel_check_out_date_must_follow_check_in_date():
         )
 
 
+def test_hotel_accepts_a_decimal_star_rating_from_the_catalog():
+    # Regression: catalog hotels are rated like 4.9 (hotels.star_rating is FLOAT8),
+    # and saving a draft with one failed with 422 int_from_float.
+    hotel = HotelInput.model_validate(
+        {"hotel_name": "The Denpasar House", "star_rating": 4.9, "city": "Denpasar", "check_in_day": 1, "check_out_day": 2}
+    )
+    assert hotel.star_rating == 4.9
+
+
+@pytest.mark.parametrize("rating", [0.5, 5.1])
+def test_hotel_star_rating_stays_within_one_to_five(rating):
+    with pytest.raises(ValidationError):
+        HotelInput.model_validate(
+            {"hotel_name": "Out of range", "star_rating": rating, "city": "Osaka", "check_in_day": 1, "check_out_day": 2}
+        )
+
+
 def test_flight_arrival_must_follow_departure():
     with pytest.raises(ValidationError):
         FlightInput.model_validate(
@@ -335,7 +352,7 @@ def test_openapi_operation_ids_are_unique():
 
 def test_openapi_version_bumped_for_this_change():
     spec = _load_openapi()
-    assert spec["info"]["version"] == "2.8.0"
+    assert spec["info"]["version"] == "2.9.0"
 
 
 @pytest.mark.parametrize(
@@ -488,3 +505,10 @@ def test_handover_states_migration_not_deployed():
     assert expected_normalized in text, (
         "handover must state, verbatim, that the migration has not been deployed"
     )
+
+
+def test_openapi_hotel_input_star_rating_is_a_number():
+    spec = _load_openapi()
+    rating = spec["components"]["schemas"]["HotelInput"]["properties"]["star_rating"]
+    assert rating["type"] == "number"
+    assert (rating["minimum"], rating["maximum"]) == (1, 5)
