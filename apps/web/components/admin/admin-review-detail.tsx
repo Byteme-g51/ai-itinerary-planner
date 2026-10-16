@@ -1,5 +1,6 @@
 "use client";
 
+import { packageVibeLabels } from "../../lib/vibes";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState, type ReactNode } from "react";
@@ -183,12 +184,8 @@ function Cover({ pkg }: { pkg: AdminPackageDetail }) {
           <div><dt>Duration</dt><dd>{formatAdminDuration(pkg.duration_days)}</dd></div>
           <div><dt>Group size</dt><dd>{pkg.max_group_size ? `Up to ${pkg.max_group_size}` : "Not provided"}</dd></div>
           <div><dt>Season</dt><dd>{pkg.season || "Not provided"}</dd></div>
+          <div><dt>Vibe</dt><dd>{packageVibeLabels(pkg).join(" · ") || "Not provided"}</dd></div>
         </dl>
-        {pkg.tags?.length ? (
-          <ul className="admin-detail-tags" aria-label="Package tags">
-            {pkg.tags.map((tag) => <li key={tag}>{tag}</li>)}
-          </ul>
-        ) : null}
       </div>
     </section>
   );

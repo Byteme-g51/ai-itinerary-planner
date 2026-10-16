@@ -1094,3 +1094,15 @@ test("an overnight arrival flight sorts by its landing, ahead of the day's stops
   assert.deepEqual([breakfast, flight].sort((a, b) => compareDayItems(a, b, 1)).map((i) => i.id), [1, 2]);
   assert.deepEqual([flight, breakfast].sort((a, b) => compareDayItems(a, b)).map((i) => i.id), [2, 1], "a return flight still sorts by departure");
 });
+
+test("package updates send the saved vibes and season, never tags", () => {
+  const pkg = {
+    package_id: "pkg-vibes", title: "Kyoto", duration_days: 1,
+    vibes: ["foodie", "scenic"], season: "autumn", tags: ["culture"],
+    flights: [], hotels: [], activities: [], days: [],
+  } as CreatorPackageDetail;
+  const update = buildPackageUpdate(pkg, [], "Kyoto");
+  assert.deepEqual(update.vibes, ["foodie", "scenic"]);
+  assert.equal(update.season, "autumn");
+  assert.equal("tags" in update, false);
+});

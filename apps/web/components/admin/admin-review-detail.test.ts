@@ -29,7 +29,7 @@ const packageDetail: AdminPackageDetail = {
   description: "A measured itinerary focused on local food and quieter neighbourhoods.",
   max_group_size: 8,
   season: "dry season",
-  tags: ["food", "slow travel"],
+  vibes: ["foodie", "scenic"],
   flights: [
     {
       flight_id: "flight-1",

@@ -384,6 +384,7 @@ export function copilotSuggestionToTimelineItem(
   };
 }
 import type { CopilotSuggestionV1 } from "./copilot";
+import { normalizeSeason, vibeIdsFromLabels } from "./vibes";
 import type { CreatorFlightDetail, CreatorHotelDetail, CreatorPackageDetail, UpdatePackageInput } from "./creator-api";
 
 function parseDay(dateStr: string | null): number | null {
@@ -829,7 +830,8 @@ export function buildPackageUpdate(
     destination_city: pkg.destination_city ?? undefined,
     duration_days: days.length,
     max_group_size: pkg.max_group_size ?? undefined,
-    tags: pkg.tags ?? undefined,
+    vibes: vibeIdsFromLabels(pkg.vibes),
+    season: normalizeSeason(pkg.season),
     days: days.map((day, index) => ({
       day_number: index + 1,
       title: day.title === `Day ${index + 1}` ? null : day.title || null,

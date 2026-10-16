@@ -29,8 +29,7 @@ import {
   itineraryToPackageInput,
   type WizardSelection,
 } from "../lib/ai/itinerary";
-import { wizardVibesStorageKey } from "../lib/review-draft";
-import { VIBES } from "../lib/vibes";
+import { normalizeSeason, vibeIdsFromLabels, VIBES } from "../lib/vibes";
 import { supabase } from "../lib/supabase/client";
 import { creatorPackageRoute, creatorPackageShareRoute } from "../lib/routes";
 import { hasAdminApprovalAccess } from "../lib/admin-api";
@@ -2496,9 +2495,9 @@ export function AIWizardScreen({ onNav, initialStep = 0, requestedStep, stepRequ
             customDurationDays,
             season: season ?? "",
           }),
-          // Persist the raw vibe ids — tags is the only backend field that
-          // carries them (see lib/vibes.ts for the canonical list).
-          tags: vibes,
+          // Dedicated columns, validated by the API (see lib/vibes.ts).
+          vibes: vibeIdsFromLabels(vibes),
+          season: normalizeSeason(season),
         };
         const { package_id } = await createPackage(
           timeoutFetch,
@@ -2512,20 +2511,6 @@ export function AIWizardScreen({ onNav, initialStep = 0, requestedStep, stepRequ
         if (inFlightSetupRef.current === runSetup) {
           setCreatedPackageId(package_id);
           setGenerationComplete(true);
-        }
-        // Vibes/season have no backend field to persist to (not even proposed
-        // in the save/submit handover) — stashed here so the Finalise & Review
-        // page can still show them once, right after creation.
-        try {
-          window.sessionStorage.setItem(
-            wizardVibesStorageKey(package_id),
-            JSON.stringify({
-              vibes: vibes.map((vibeId) => VIBES.find((item) => item.id === vibeId)?.label ?? vibeId),
-              season,
-            }),
-          );
-        } catch {
-          // best-effort only
         }
       } catch (error) {
         if (inFlightSetupRef.current === runSetup) inFlightSetupRef.current = null;
@@ -2610,7 +2595,12 @@ export function AIWizardScreen({ onNav, initialStep = 0, requestedStep, stepRequ
         season: seasonOverride ?? "",
       });
       const description = `${styleLabels.length ? `A ${styleLabels.join(", ")} trip` : "A custom trip"}${seasonOverride ? `, built for ${seasonOverride}` : ", built from scratch"}.`;
-      const { package_id } = await createPackage(fetch, BUILDER_API_URL, accessToken, { ...base, description, tags: vibes });
+      const { package_id } = await createPackage(fetch, BUILDER_API_URL, accessToken, {
+        ...base,
+        description,
+        vibes: vibeIdsFromLabels(vibes),
+        season: normalizeSeason(seasonOverride),
+      });
       router.push(`/packages/editor/${encodeURIComponent(package_id)}`);
     } catch (error) {
       setCreateError(error instanceof Error ? error.message : "Unable to create this package.");
