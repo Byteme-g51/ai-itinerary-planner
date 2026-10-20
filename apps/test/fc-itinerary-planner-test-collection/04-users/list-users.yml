@@ -8,7 +8,7 @@ http:
   url: "{{host-api}}/users"
   auth:
     type: bearer
-    token: "{{access-token}}"
+    token: "{{admin-access-token}}"
 
 runtime:
   assertions:
