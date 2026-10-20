@@ -456,6 +456,12 @@ test("Gemini thinking is capped at a small fixed budget, only on models that sup
   assert.equal(geminiGenerationConfig("gemini-1.5-flash").thinkingConfig, undefined);
 });
 
+test("Gemini 3.6 Flash, the check's default model, keeps its own thinking with the repeatable settings", () => {
+  const flash36 = geminiGenerationConfig("gemini-3.6-flash");
+  assert.equal(flash36.thinkingConfig, undefined, "a fixed level was faster but less reliable");
+  assert.deepEqual([flash36.temperature, flash36.seed, flash36.topK, flash36.responseMimeType], [0, 42, 1, "application/json"]);
+});
+
 test("an AI issue whose field isn't a day still gets one, so the Go to Day button shows", () => {
   // Regression: the AI copied the prompt's placeholder ("day/slot reference") into
   // `field`, so the Florence duplicate warning had no Go to Day button.

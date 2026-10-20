@@ -16,7 +16,7 @@ import {
 } from "../../../../lib/feasibility";
 
 const GEMINI_KEY = process.env.GEMINI_API_KEY!;
-const MODEL_NAME = process.env.MODEL_NAME || "gemini-2.5-flash";
+const MODEL_NAME = process.env.MODEL_NAME || "gemini-3.6-flash";
 // The key travels in a header so it can't end up in request logs or error messages.
 const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL_NAME}:generateContent`;
 
@@ -91,10 +91,12 @@ export function putCachedAiResult(key: string, result: unknown): void {
 }
 
 /**
- * temperature 0 + fixed seed + topK 1 for the most repeatable answers. Gemini 2.5
- * Flash's thinking is capped at a small fixed budget: with none, it stopped catching
- * things like a museum booked at 06:00; unlimited, its answers varied run to run.
- * Only set on 2.5 Flash models, so switching MODEL_NAME can't break the request.
+ * temperature 0 + fixed seed + topK 1 for the most repeatable answers. Gemini 3.6
+ * Flash (the default) keeps its own thinking: on 12 replayed itineraries it caught
+ * every case in two runs, against 11/12 for 2.5 Flash; a fixed "low" level was faster
+ * but missed one, and "medium" matched the default. 2.5 Flash, if MODEL_NAME selects
+ * it, keeps its small fixed budget: with none it missed a museum booked at 06:00,
+ * unlimited its answers varied run to run.
  */
 export function geminiGenerationConfig(model: string) {
   return {
