@@ -55,7 +55,11 @@ def supabase(monkeypatch):
 
 
 def test_listing_users_requires_sign_in(monkeypatch):
+    # Configured like a real deployment, so the 401 comes from the missing token
+    # and not from the 500 that unset Supabase settings raise first (CI has none).
+    monkeypatch.setattr(core, "SUPABASE_URL", "https://example.supabase.co")
     monkeypatch.setattr(core, "SUPABASE_ANON_KEY", "anon-key")
+    monkeypatch.setattr(core, "SUPABASE_SERVICE_ROLE_KEY", "service-key")
     assert client.get("/users").status_code == 401
 
 
