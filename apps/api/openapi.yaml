@@ -40,7 +40,7 @@ info:
     Error responses use `ErrorResponse`, except user-management upstream failures, which return an `error` string.
     All monetary values are stored and returned as **whole AUD dollars** (integer), matching the database columns.
 
-  version: "2.9.0"
+  version: "3.0.0"
   license:
     name: Proprietary, all rights reserved
 
@@ -1819,7 +1819,7 @@ paths:
       operationId: usersList
       description: |
         Returns normalized users from the Supabase Auth admin API.
-        Requires a valid Supabase bearer token; the current handler does not check the caller's role.
+        Admin only: requires a valid Supabase bearer token for a profile with role `admin`; other callers get 403.
         No pagination parameters are exposed; the upstream default page is returned.
       responses:
         "200":
@@ -1836,6 +1836,8 @@ paths:
                       $ref: '#/components/schemas/ManagedUser'
         "401":
           $ref: '#/components/responses/Unauthorized'
+        "403":
+          $ref: '#/components/responses/Forbidden'
         default:
           description: Upstream failures preserve the upstream HTTP status and return an error string. Authentication service or configuration failures use ErrorResponse.
           content:
@@ -1855,7 +1857,7 @@ paths:
       summary: Update an Auth user's email or metadata
       operationId: usersUpdate
       description: |
-        Requires a valid Supabase bearer token; the current handler does not check the caller's role.
+        Admin only: requires a valid Supabase bearer token for a profile with role `admin`; other callers get 403.
         Updates email, app_metadata.status, and user_metadata.createdAt when non-empty values are supplied.
         Returns the upstream Supabase Auth JSON unchanged, not a normalized ManagedUser.
       parameters:
@@ -1880,6 +1882,8 @@ paths:
                 additionalProperties: true
         "401":
           $ref: '#/components/responses/Unauthorized'
+        "403":
+          $ref: '#/components/responses/Forbidden'
         "422":
           $ref: '#/components/responses/UnprocessableEntity'
         default:

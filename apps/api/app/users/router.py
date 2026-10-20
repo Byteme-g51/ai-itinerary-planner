@@ -4,8 +4,10 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from app import core
-from app.core import require_user
+from app.core import require_admin_ctx
 
+# Admin-only: listing returns every account's email and role, and updating can
+# change another account's email and status (service-role calls to Supabase Auth).
 router = APIRouter()
 
 
@@ -16,7 +18,7 @@ class UserUpdate(BaseModel):
 
 
 @router.get("/users")
-def list_users(_user: dict = Depends(require_user)):
+def list_users(_admin: dict = Depends(require_admin_ctx)):
     response = requests.get(
         f"{core.SUPABASE_URL}/auth/v1/admin/users",
         headers=core._admin_headers(),
@@ -47,7 +49,7 @@ def list_users(_user: dict = Depends(require_user)):
 
 
 @router.patch("/users/{user_id}")
-def update_user(user_id: str, payload: UserUpdate, _user: dict = Depends(require_user)):
+def update_user(user_id: str, payload: UserUpdate, _admin: dict = Depends(require_admin_ctx)):
     update_payload = {}
     if payload.email:
         update_payload["email"] = payload.email

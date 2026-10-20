@@ -1,5 +1,5 @@
 // RLS verification for 0003_rls_policies.sql.
-// Run ONLY after 0003 is applied by the pipeline:  node scripts/rls.check.mjs
+// Run ONLY after the migrations it covers (0003, 0023) are applied by the pipeline:  node scripts/rls.check.mjs
 // Uses the anon key + optional demo logins; makes no schema changes.
 // The only durable write is one package_approvals audit row (no delete policy exists).
 
@@ -110,6 +110,19 @@ if (!mia || !casey || !admin) {
       .from('travel_packages').update({ title: miaPkg.title }).eq('package_id', miaPkg.package_id);
     assert.ifError(e2);
     ok('mia updates own package (title restored)');
+  }
+
+  // casey setting her own role to admin → rejected (migration 0023); her name still edits
+  {
+    const caseyId = (await casey.auth.getUser()).data.user.id;
+    const { error } = await casey.from('profiles').update({ role: 'admin' }).eq('id', caseyId);
+    assert(error, 'casey promoted herself to admin');
+    const { data: me, error: e1 } = await casey.from('profiles').select('full_name,role').eq('id', caseyId).single();
+    assert.ifError(e1);
+    assert.notEqual(me.role, 'admin', 'casey\'s role changed to admin');
+    const { error: e2 } = await casey.from('profiles').update({ full_name: me.full_name }).eq('id', caseyId);
+    assert.ifError(e2);
+    ok('casey cannot change her own role; she can still edit her name');
   }
 
   const adminId = (await admin.auth.getUser()).data.user.id;
