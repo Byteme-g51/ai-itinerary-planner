@@ -16,9 +16,9 @@ import {
 } from "../../../../lib/feasibility";
 
 const GEMINI_KEY = process.env.GEMINI_API_KEY!;
-const MODEL_NAME = process.env.MODEL_NAME || "gemini-2.5-flash";
+const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-3.6-flash";
 // The key travels in a header so it can't end up in request logs or error messages.
-const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL_NAME}:generateContent`;
+const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;
 
 const RATE_LIMIT = { max: 20, windowMs: 60_000 };
 const MAX_BODY_BYTES = 1024 * 1024;
@@ -91,10 +91,12 @@ export function putCachedAiResult(key: string, result: unknown): void {
 }
 
 /**
- * temperature 0 + fixed seed + topK 1 for the most repeatable answers. Gemini 2.5
- * Flash's thinking is capped at a small fixed budget: with none, it stopped catching
- * things like a museum booked at 06:00; unlimited, its answers varied run to run.
- * Only set on 2.5 Flash models, so switching MODEL_NAME can't break the request.
+ * temperature 0 + fixed seed + topK 1 for the most repeatable answers. Gemini 3.6
+ * Flash (the default) keeps its own thinking: on 12 replayed itineraries it caught
+ * every case in two runs, against 11/12 for 2.5 Flash; a fixed "low" level was faster
+ * but missed one, and "medium" matched the default. 2.5 Flash, if GEMINI_MODEL selects
+ * it, keeps its small fixed budget: with none it missed a museum booked at 06:00,
+ * unlimited its answers varied run to run.
  */
 export function geminiGenerationConfig(model: string) {
   return {
@@ -838,7 +840,7 @@ export async function POST(req: NextRequest) {
     }
 
     // The model settings are part of the key, so changing them can't serve old answers.
-    const cacheKey = aiCacheKey(`${MODEL_NAME} ${JSON.stringify(geminiGenerationConfig(MODEL_NAME))}`, systemPrompt, userPrompt);
+    const cacheKey = aiCacheKey(`${GEMINI_MODEL} ${JSON.stringify(geminiGenerationConfig(GEMINI_MODEL))}`, systemPrompt, userPrompt);
     const cached = getCachedAiResult(cacheKey);
     const res = cached ? null : await fetch(GEMINI_URL, {
       method: "POST",
@@ -846,7 +848,7 @@ export async function POST(req: NextRequest) {
       body: JSON.stringify({
         system_instruction: { parts: [{ text: systemPrompt }] },
         contents: [{ parts: [{ text: userPrompt }] }],
-        generationConfig: geminiGenerationConfig(MODEL_NAME),
+        generationConfig: geminiGenerationConfig(GEMINI_MODEL),
       }),
     }).catch((err) => {
       console.warn("Gemini API unreachable — AI checks skipped:", err?.message);
