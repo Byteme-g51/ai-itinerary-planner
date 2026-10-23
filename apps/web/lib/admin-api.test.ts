@@ -4,9 +4,11 @@ import test from "node:test";
 import {
   AdminApiError,
   approveAdminPackage,
+  deleteAdminPackage,
   fetchAdminPackage,
   fetchAdminUsers,
   fetchPendingApprovals,
+  fetchReviewedApprovals,
   hasAdminApprovalAccess,
   rejectAdminPackage,
 } from "./admin-api";
@@ -199,6 +201,24 @@ test("fetchAdminPackage loads the existing package detail endpoint", async () =>
   );
 });
 
+test("fetchAdminPackage normalises the creator's recorded feasibility result", async () => {
+  const stored = {
+    quality_score: 84,
+    is_feasible: true,
+    hard_errors: [],
+    soft_warnings: [{ error_code: "EMPTY_DAY", rule: "R9", severity: "warning", affected_item: "Day 5", message: "No activities.", action: "Add one." }],
+    checked_at: "2026-10-08T04:22:00.000Z",
+  };
+  const load = (latest_feasibility: unknown) =>
+    fetchAdminPackage(async () => Response.json({ ...packageDetail, latest_feasibility }), "http://localhost:8000", "t", "p");
+
+  assert.deepEqual((await load(stored)).latest_feasibility, stored);
+  // Client-supplied, so garbage reads as "nothing recorded" rather than breaking the page.
+  assert.equal((await load("nonsense")).latest_feasibility, null);
+  assert.equal((await load({ hard_errors: "x" })).latest_feasibility, null);
+  assert.equal((await load(null)).latest_feasibility, null);
+});
+
 test("approveAdminPackage posts optional internal notes to the existing approval endpoint", async () => {
   const fetcher: typeof fetch = async (input, init) => {
     assert.equal(String(input), "http://localhost:8000/approvals/package%2F1/approve");
@@ -258,5 +278,48 @@ test("package review requests preserve 404 and 409 responses for dedicated UI st
   await assert.rejects(
     approveAdminPackage(conflict, "http://localhost:8000", "token", "package-1", ""),
     (error: unknown) => error instanceof AdminApiError && error.status === 409,
+  );
+});
+
+test("fetchReviewedApprovals requests the decided view", async () => {
+  const fetcher: typeof fetch = async (input, init) => {
+    assert.equal(
+      String(input),
+      "http://localhost:8000/approvals?page=1&per_page=20&view=decided",
+    );
+    assert.deepEqual(init?.headers, { Authorization: "Bearer access-token" });
+    return Response.json(approvalResponse);
+  };
+
+  const result = await fetchReviewedApprovals(
+    fetcher,
+    "http://localhost:8000/",
+    "access-token",
+    { page: 1, perPage: 20 },
+  );
+  assert.equal(result.meta.total, 21);
+});
+
+test("deleteAdminPackage issues an authorized DELETE and accepts an empty 204", async () => {
+  const fetcher: typeof fetch = async (input, init) => {
+    assert.equal(String(input), "http://localhost:8000/approvals/package%2F9");
+    assert.equal(init?.method, "DELETE");
+    assert.deepEqual(init?.headers, { Authorization: "Bearer access-token" });
+    return new Response(null, { status: 204 });
+  };
+
+  await deleteAdminPackage(fetcher, "http://localhost:8000/", "access-token", "package/9");
+});
+
+test("deleteAdminPackage surfaces a 409 for a package that is still pending", async () => {
+  const fetcher: typeof fetch = async () =>
+    Response.json(
+      { error_code: "INVALID_STATUS_TRANSITION", message: "Cannot delete a package in status 'pending_review'." },
+      { status: 409 },
+    );
+
+  await assert.rejects(
+    deleteAdminPackage(fetcher, "http://localhost:8000/", "access-token", "package-9"),
+    /pending_review/,
   );
 });

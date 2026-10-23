@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, Query, Response
 from app.core import _err, require_user_ctx
 from app.packages import service
 from app.packages.schemas import (
+    parse_feasibility_result,
     PackageListResponse,
     SubmitBody,
     TravelPackageCreate,
@@ -115,8 +116,13 @@ def submit_package(
     ctx: dict = Depends(require_user_ctx),
 ):
     try:
+        feasibility = parse_feasibility_result(body.feasibility_result if body else None)
         outcome, result = service.submit_package(
-            package_id, ctx["headers"], ctx["uid"], body.submission_note if body else None
+            package_id,
+            ctx["headers"],
+            ctx["uid"],
+            body.submission_note if body else None,
+            feasibility,
         )
     except service.UpstreamError as exc:
         return _upstream(exc)

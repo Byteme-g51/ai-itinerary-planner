@@ -18,6 +18,7 @@ import type {
   HotelInput,
   PackageDayInput,
 } from "../creator-api";
+import { supabase } from "../supabase/client";
 
 // ─── Wizard input ─────────────────────────────────────────────────────────────
 
@@ -180,17 +181,33 @@ export function itineraryToPackageInput(
   res: ItineraryResponse,
 ): CreatePackageInput {
   const engineDuration = res.trip?.duration_days;
-  const duration = Math.max(
+
+  // The itinerary's own days are the trip. A stay may push it out by one, for
+  // a check-out on the morning after the last day, and no further.
+  //
+  // The hotel used to be able to set the length on its own, via a date
+  // measured against trip.travel_dates.depart_date. When the engine re-dated
+  // the days to a real flight and left depart_date behind, that subtraction
+  // returned 301 for a 12-day Singapore trip and the editor drew 301 tabs,
+  // 289 of them empty. The engine keeps those dates in step now; this stops
+  // any future drift from reaching the editor at all.
+  const statedDuration =
     Number.isInteger(engineDuration) && (engineDuration as number) >= 1
       ? (engineDuration as number)
-      : base.duration_days,
-    res.days?.length ?? 0,
+      : base.duration_days;
+
+  const dayCount = Math.max(statedDuration, res.days?.length ?? 0);
+
+  const stayDuration = Math.max(
+    0,
     ...(res.accommodation ?? []).map((hotel) => relativeDayOf(
       hotel.check_out,
       res.trip?.travel_dates?.depart_date,
       Math.max(1, roundOrNull(hotel.nights) ?? 1) + 1,
     )),
   );
+
+  const duration = Math.max(dayCount, Math.min(stayDuration, dayCount + 1));
   const flights: FlightInput[] = [];
   for (const [index, flight] of (res.flights ?? []).entries()) {
     const origin = iataOf(flight.origin);
@@ -301,9 +318,11 @@ export async function generateItinerary(
   selection: WizardSelection,
   originCity = "Sydney",
 ): Promise<ItineraryResponse> {
+  const token = (await supabase.auth.getSession()).data.session?.access_token;
+  if (!token) throw new Error("Your session expired. Please sign in again.");
   const response = await fetch("/api/ai/recommend", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
     body: JSON.stringify({
       query: buildItineraryQuery(selection),
       origin_city: originCity,
@@ -316,6 +335,8 @@ export async function generateItinerary(
       itinerary_timeout: "The AI took too long to respond. Please try again.",
       api_unreachable: "Could not reach the AI service. Please try again.",
       endpoint_unavailable: "The AI service is unavailable right now. Please try again later.",
+      unauthorized: "Your session expired. Please sign in again.",
+      rate_limited: "You're generating itineraries too quickly. Please wait a moment and try again.",
     };
     throw new Error(
       friendly[detail?.error as string] ?? `Itinerary request failed (${response.status})`,

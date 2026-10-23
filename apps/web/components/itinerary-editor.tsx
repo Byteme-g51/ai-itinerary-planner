@@ -48,10 +48,13 @@ import {
 } from "../lib/creator-api";
 import { pendingMediaStorageKey, parsePendingMediaDays, type PendingMediaDays } from "../lib/pending-media";
 import { itinerarySnapshotStorageKey, parseWizardVibesDraft, wizardVibesStorageKey } from "../lib/review-draft";
+import { normalizeSeason, packageVibeLabels, vibeIdsFromLabels } from "../lib/vibes";
 import { APP_ROUTES } from "../lib/routes";
 import { iataOf } from "../lib/ai/itinerary";
 import { ACTIVITY_GAP_MIN, minutesToTime, TRANSFER_BUFFER_MIN } from "../lib/feasibility";
 import { supabase } from "../lib/supabase/client";
+import { feasibilityStorageKey, toSubmittedFeasibility } from "../lib/feasibility-result";
+import { baselineOf, liveView, localChecks, type LiveBaseline } from "../lib/live-feasibility";
 import Icon from "./icon";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
@@ -187,6 +190,18 @@ function parseIssueDay(field?: string): number | null {
   return match ? Number(match[1]) : null;
 }
 
+// The card's big time is the end that anchors the day (flightRole), the small
+// line the other end. Reads departureTime/arrivalTime, never item.time, which
+// holds the anchor for package flights but the landing for older dated ones.
+export function flightCardTimes(item: TimelineItem, overnightArrival: boolean): { main: string; sub?: string } {
+  const { departureTime: takeOff, arrivalTime: landing } = item;
+  if (item.flightRole === "arrival") {
+    const sub = takeOff && landing ? (overnightArrival ? `Departs ${takeOff} the day before` : `from ${takeOff}`) : undefined;
+    return { main: landing || takeOff || item.time, sub };
+  }
+  return { main: takeOff || landing || item.time, sub: takeOff && landing ? `lands ${landing}` : undefined };
+}
+
 export function referenceFlightPresentation(item: TimelineItem) {
   const route = item.originIata && item.destinationIata
     ? `${item.originIata} → ${item.destinationIata}`
@@ -215,7 +230,7 @@ export function referenceFlightPresentation(item: TimelineItem) {
 // their recorded pending day when one exists (uploaded, then refreshed
 // before saving), else on day 1 as they always have.
 // ponytail: a package_media.day_number column is the real fix; this
-// sessionStorage stash only covers the tab that did the upload.
+// localStorage stash only covers the device that did the upload.
 export function placeUnassociatedMedia(
   days: BuilderDay[],
   media: { media_id: string; url: string; caption?: string | null }[],
@@ -311,7 +326,7 @@ export function isCreatorPickComplete({ title, description }: { title: string; d
 // own displayed time is a real clock time — a hotel stop shows "Check-in" /
 // "Check-out" / "Overnight stay" instead (bookings only carry a date, never
 // a time), so it naturally never enters either side of this check.
-export function findTimeConflict(items: TimelineItem[], editingId: number, time: string, duration: string): string | null {
+export function findTimeConflict(items: TimelineItem[], editingId: number, time: string, duration: string, overnightArrivalId?: number): string | null {
   const index = items.findIndex((item) => item.id === editingId);
   if (index === -1) return null;
 
@@ -321,7 +336,7 @@ export function findTimeConflict(items: TimelineItem[], editingId: number, time:
     // travel time (e.g. ~6hrs SYD→DPS), not time occupied after landing, so
     // adding it here double-counts the flight. For a relative leg `time` is the
     // departure, so the end comes from flightEndClock, not `time` alone.
-    const previousEnds = previous.type === "FLIGHT" ? flightEndClock(previous) : getEndTime(previous.time, previous.duration ?? "0");
+    const previousEnds = previous.type === "FLIGHT" ? flightEndClock(previous, previous.id === overnightArrivalId) : getEndTime(previous.time, previous.duration ?? "0");
     if (time < previousEnds) return `Must start at or after ${previous.title} ends, at ${previousEnds}`;
   }
 
@@ -331,7 +346,7 @@ export function findTimeConflict(items: TimelineItem[], editingId: number, time:
     // flight, its own landing is already its end — don't add travel duration
     // on top when checking it against the next item's start.
     const isFlight = items[index]?.type === "FLIGHT";
-    const thisEnds = isFlight ? flightEndClock({ ...items[index]!, time }) : getEndTime(time, duration);
+    const thisEnds = isFlight ? flightEndClock({ ...items[index]!, time }, editingId === overnightArrivalId) : getEndTime(time, duration);
     if (thisEnds > next.time) {
       const latestStart = isFlight ? next.time : subtractMinutes(next.time, duration);
       return `Must start by ${latestStart}, so it ends before ${next.title} starts at ${next.time}`;
@@ -542,7 +557,7 @@ function detectGibberish(text: string): boolean {
  */
 export function annotateItems(
   raw: TimelineItem[],
-  landing?: { time: string; departureTime?: string; bufferMin: number; international: boolean; landsOnLaterDay?: number },
+  landing?: { time: string; departureTime?: string; bufferMin: number; international: boolean; landsOnLaterDay?: number; overnightFlightId?: number },
 ): TimelineItem[] {
   const isTimedStop = (item: TimelineItem) =>
     item.type !== "FLIGHT" && item.type !== "HOTEL" && REAL_TIME_PATTERN.test(item.time);
@@ -586,7 +601,7 @@ export function annotateItems(
     // time, not time occupied after landing, so adding it would double-count
     // (same bug fixed in findTimeConflict). A relative leg's `time` is its
     // departure, so the end comes from flightEndClock.
-    const endMin = item.type === "FLIGHT" ? toMinutes(flightEndClock(item)) : toMinutes(item.time) + durationMin;
+    const endMin = item.type === "FLIGHT" ? toMinutes(flightEndClock(item, item.id === landing?.overnightFlightId)) : toMinutes(item.time) + durationMin;
 
     // 1 & 2. Gap vs next item — the list is a single day's items
     const next = raw[i + 1];
@@ -1044,6 +1059,8 @@ export default function ItineraryEditor({
   const [titleDraft, setTitleDraft] = useState(pkg.title);
   const [editingTitle, setEditingTitle] = useState(false);
   const [feasResult, setFeasResult] = useState<FeasibilityResult | null>(null);
+  // The deterministic issues present when feasResult was produced, so edits made since can be re-evaluated live.
+  const [liveBaseline, setLiveBaseline] = useState<LiveBaseline | null>(null);
   const [feasLoading, setFeasLoading] = useState(false);
   const [lastCheckedAt, setLastCheckedAt] = useState<number | null>(null);
   const [resultStale, setResultStale] = useState(false);
@@ -1121,8 +1138,9 @@ export default function ItineraryEditor({
     const arrival = arrivalLanding(days);
     if (!arrival) return null;
     const international = deriveFlightType(arrival.flight.originIata, arrival.flight.destinationIata, pkg.destination_country) === "international";
-    return { ...arrival, departureTime: arrival.flight.departureTime, international, bufferMin: TRANSFER_BUFFER_MIN[international ? "international" : "domestic"] };
+    return { ...arrival, departureTime: arrival.flight.departureTime, international, bufferMin: TRANSFER_BUFFER_MIN[international ? "international" : "domestic"], overnightFlightId: arrival.overnight ? arrival.flight.id : undefined };
   }, [days, pkg.destination_country]);
+  const overnightArrivalId = landing?.overnightFlightId;
   const items = useMemo(
     () => annotateItems(
       activeDayData?.items ?? [],
@@ -1139,28 +1157,51 @@ export default function ItineraryEditor({
   // the more reliable signal for "what city is this day actually in."
   const activeDayCity = pkg.destination_city ?? null;
   const tripDestination = [pkg.destination_city, pkg.destination_country].filter(Boolean).join(", ");
-  // Vibes/season have no backend field (see the wizard's create flow) — this
-  // is a best-effort read of the sessionStorage stash written at creation,
-  // so it only shows up in the browser tab that made or last edited the trip.
-  // Editing here re-writes the same stash so the display updates immediately.
-  const [tripVibesDraft, setTripVibesDraft] = useState(() => (
-    typeof window === "undefined" ? null : parseWizardVibesDraft(window.sessionStorage.getItem(wizardVibesStorageKey(pkg.package_id)))
-  ));
+  // Vibes/season live on the package (travel_packages.vibes / season). A session stash from before the columns
+  // existed may still hold a value the server never received.
+  const [tripVibesDraft, setTripVibesDraft] = useState<{ vibes: string[]; season: string | null } | null>(() => {
+    const savedVibes = packageVibeLabels(pkg);
+    const savedSeason = normalizeSeason(pkg.season);
+    const stash = typeof window === "undefined"
+      ? null
+      : parseWizardVibesDraft(window.sessionStorage.getItem(wizardVibesStorageKey(pkg.package_id)));
+    return {
+      vibes: savedVibes.length ? savedVibes : stash?.vibes ?? [],
+      season: savedSeason ?? stash?.season ?? null,
+    };
+  });
   const [editingTripParams, setEditingTripParams] = useState(false);
   const [tripParamsDraft, setTripParamsDraft] = useState<{ vibes: string[]; season: string | null }>({ vibes: [], season: null });
   const startEditingTripParams = () => {
     setTripParamsDraft({ vibes: tripVibesDraft?.vibes ?? [], season: tripVibesDraft?.season ?? null });
     setEditingTripParams(true);
   };
-  const saveTripParams = () => {
+  const [savingTripParams, setSavingTripParams] = useState(false);
+  const saveTripParams = async () => {
+    if (savingTripParams) return;
     const next = { vibes: tripParamsDraft.vibes, season: tripParamsDraft.season };
+    setSavingTripParams(true);
     try {
-      window.sessionStorage.setItem(wizardVibesStorageKey(pkg.package_id), JSON.stringify(next));
-    } catch {
-      // best-effort only
+      const token = await accessToken();
+      if (!token) {
+        onSessionExpired();
+        throw new Error("Your session expired. Please sign in again.");
+      }
+      // Sent on its own so a trip-details edit never writes the unsaved
+      // day edits; the API keeps every field that is omitted.
+      const persisted = await updatePackage(fetch, API_URL, token, pkg.package_id, {
+        vibes: vibeIdsFromLabels(next.vibes),
+        season: normalizeSeason(next.season),
+      });
+      setPackageDetail((current) => ({ ...current, vibes: persisted.vibes ?? [], season: persisted.season ?? null }));
+      setTripVibesDraft(next);
+      setEditingTripParams(false);
+      showNotice("Trip details saved");
+    } catch (error) {
+      showNotice(error instanceof Error ? error.message : "Unable to save trip details.");
+    } finally {
+      setSavingTripParams(false);
     }
-    setTripVibesDraft(next);
-    setEditingTripParams(false);
   };
   // buildDaysFromPackage stamps every row of a stay with hotelStayGroupKey,
   // so the API hotel is looked up by that key rather than by counting rows —
@@ -1226,13 +1267,13 @@ export default function ItineraryEditor({
     const hotelItem = days.flatMap((day) => day.items).find((item) => item.type === "HOTEL");
     const hotelName = hotelItem?.hotelName ?? hotelItem?.title.replace(STAY_LABEL_SUFFIX, "") ?? "";
 
-    // Season is set once, in the AI creation wizard, and stashed in sessionStorage
-    // keyed by package_id (no backend field for it yet — see review-draft.ts).
-    // Manually-created packages, or a wizard package opened in a new session,
-    // simply have none stored — travel_season stays undefined rather than guessing.
-    const wizardSeason = typeof window === "undefined"
+    // The saved season (travel_packages.season) is the source; a session stash
+    // from before the column existed is only a fallback. With neither,
+    // travel_season stays undefined rather than guessing.
+    const stashedSeason = typeof window === "undefined"
       ? null
       : parseWizardVibesDraft(window.sessionStorage.getItem(wizardVibesStorageKey(pkg.package_id)))?.season;
+    const wizardSeason = normalizeSeason(tripVibesDraft?.season ?? pkg.season) ?? normalizeSeason(stashedSeason);
     const travelSeason = wizardSeason ? wizardSeason.charAt(0).toUpperCase() + wizardSeason.slice(1) : undefined;
 
     return {
@@ -1306,13 +1347,24 @@ export default function ItineraryEditor({
     // while a re-check is in flight — only replace it once fresh data lands.
     setFeasLoading(true);
     try {
+      const token = await accessToken();
+      if (!token) {
+        onSessionExpired();
+        showNotice("Your session expired. Please sign in again.");
+        return;
+      }
+      const payload = buildValidationPayload();
+      // Baseline = what the deterministic rules say about the content being sent,
+      // not about whatever it becomes while the request is in flight.
+      const baseline = baselineOf(localChecks(payload));
       const res = await fetch("/api/ai/validate", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(buildValidationPayload()),
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify(payload),
       });
       if (res.ok) {
         const data = await res.json();
+        setLiveBaseline(baseline);
         setFeasResult(data);
         // Timestamps a check that only ever runs from a click handler, never
         // during render — safe despite the purity lint's static analysis.
@@ -1643,9 +1695,15 @@ export default function ItineraryEditor({
         .filter((item) => item.type !== "FLIGHT" && item.type !== "HOTEL")
         .map((item) => (item.notes ? `${item.title} (${item.notes})` : item.title));
 
+      const token = await accessToken();
+      if (!token) {
+        onSessionExpired();
+        showNotice("Your session expired. Please sign in again.");
+        return;
+      }
       const response = await fetch("/api/ai/generate-content", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
         body: JSON.stringify({
           packageTitle,
           destination: [pkg.destination_city, pkg.destination_country].filter(Boolean).join(", "),
@@ -1656,12 +1714,12 @@ export default function ItineraryEditor({
           vibe: days[activeDay]?.meta || "",
         }),
       });
-      const data = (await response.json()) as { listing?: string; error?: string };
+      const data = (await response.json()) as { listing?: string; error?: string; message?: string };
       if (data.listing) {
         setStory(data.listing);
         showNotice("Story generated");
       } else {
-        showNotice(data.error || "The story generator returned nothing.");
+        showNotice(data.message || data.error || "The story generator returned nothing.");
       }
     } catch {
       showNotice("Failed to connect to the story generator.");
@@ -1671,10 +1729,10 @@ export default function ItineraryEditor({
   };
 
   const readPendingDays = (): PendingMediaDays =>
-    parsePendingMediaDays(window.sessionStorage.getItem(pendingMediaStorageKey(pkg.package_id)));
+    parsePendingMediaDays(window.localStorage.getItem(pendingMediaStorageKey(pkg.package_id)));
   const writePendingDays = (next: PendingMediaDays) => {
     try {
-      window.sessionStorage.setItem(pendingMediaStorageKey(pkg.package_id), JSON.stringify(next));
+      window.localStorage.setItem(pendingMediaStorageKey(pkg.package_id), JSON.stringify(next));
     } catch {
       // best-effort only
     }
@@ -1960,7 +2018,7 @@ export default function ItineraryEditor({
     // a raw string sort pushed "Check-out"/"Check-in" labels below every clock
     // time and dropped the check-out card to the bottom of its own day.
     const resorted = REAL_TIME_PATTERN.test(updatedItem.time)
-      ? [...withUpdate].sort(compareDayItems)
+      ? [...withUpdate].sort((a, b) => compareDayItems(a, b, overnightArrivalId))
       : withUpdate;
 
     setItems(resorted);
@@ -1994,7 +2052,7 @@ export default function ItineraryEditor({
     next.splice(insertionIndex, 0, moved);
 
     const conflict = REAL_TIME_PATTERN.test(moved.time)
-      ? findTimeConflict(next, moved.id, moved.time, moved.duration ?? "0")
+      ? findTimeConflict(next, moved.id, moved.time, moved.duration ?? "0", overnightArrivalId)
       : null;
     if (conflict) {
       showNotice(`Can't move ${moved.title} there — ${conflict}`);
@@ -2038,8 +2096,18 @@ export default function ItineraryEditor({
       || extractClockTimeInZone(flight.departure_datetime ?? null, timezoneForIata(flight.origin_iata));
     const arrivalTime = flight.arrival_time
       || extractClockTimeInZone(flight.arrival_datetime ?? null, timezoneForIata(flight.destination_iata));
+    // A flight added on day 1 is how the traveller arrives, so its landing
+    // anchors the day, unless it lands back where the trip's first flight left
+    // from (a day trip's flight home); anywhere else it is a flight out and the
+    // take-off does. Mirrors buildDaysFromPackage so a hand-added flight behaves
+    // exactly like a generated one.
+    const tripHome = days.flatMap((day) => day.items).find((entry) => entry.type === "FLIGHT")?.originIata;
+    const flightRole: "arrival" | "departure" =
+      activeDay === 0 && (!tripHome || flight.destination_iata !== tripHome) ? "arrival" : "departure";
+    const anchorTime = flightRole === "arrival" ? arrivalTime : departureTime;
     insertItem(addingAfter, {
-      time: departureTime ?? "09:00",
+      time: anchorTime ?? "09:00",
+      flightRole,
       type: "FLIGHT",
       title: [flight.origin_iata, flight.destination_iata].filter(Boolean).join(" to ") || flight.airline || "Flight",
       price: flight.price_aud != null ? `$${flight.price_aud.toLocaleString("en-US")}` : "$0",
@@ -2259,10 +2327,21 @@ export default function ItineraryEditor({
     showNotice(`Day ${indexToDelete + 1} deleted`);
   };
 
-  const hardErrors = feasResult?.hard_errors ?? [];
-  const softWarnings = feasResult?.soft_warnings ?? [];
+  // Edits since the last full check are re-run through the deterministic rules
+  // (no network), so a fixed critical issue clears at once. AI findings and
+  // policy blocks stay as the server returned them until Re-check.
+  const currentLocalChecks = useMemo(
+    () => (feasResult ? localChecks(buildValidationPayload()) : null),
+    // buildValidationPayload reads days, packageTitle and landing — listed via those.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [feasResult, days, packageTitle, landing],
+  );
+  const live = liveView(feasResult, liveBaseline, currentLocalChecks);
+  const { hardErrors, softWarnings, criticalFixedLive } = live;
+  const criticalOpen = Boolean(feasResult) && hardErrors.length > 0;
   // No score while critical issues block submission — the check leaves it out too.
-  const scoreWithheld = Boolean(feasResult) && hardErrors.length > 0;
+  // Once they are fixed live there is still no score until a full re-check makes one.
+  const scoreWithheld = criticalOpen || (Boolean(feasResult) && criticalFixedLive);
   const displayScore = scoreWithheld ? undefined : feasResult?.quality_score;
 
   const isReadyToSubmit = Boolean(
@@ -2284,7 +2363,6 @@ export default function ItineraryEditor({
     { label: "Flights have enough transfer time after landing", passed: hardErrors.every((e) => e.error_code !== "SHORT_TRANSFER" && e.error_code !== "ACTIVITY_BEFORE_LANDING") },
     { label: "No scheduling conflicts between activities", passed: hardErrors.every((e) => e.error_code !== "TIME_OVERLAP") },
     { label: "Enough travel time between stops", passed: hardErrors.every((e) => e.error_code !== "SHORT_ACTIVITY_GAP" && e.error_code !== "SHORT_TRAVEL_TIME") },
-    { label: "Daily schedule leaves room for travel between stops", passed: hardErrors.every((e) => e.error_code !== "SCHEDULE_TOO_PACKED") },
     { label: "Package has at least one photo", passed: hardErrors.every((e) => e.error_code !== "MISSING_PHOTOS") },
     { label: "No banned competitor mentions", passed: hardErrors.every((e) => e.rule !== "BrandSafety") },
   ];
@@ -2365,6 +2443,10 @@ export default function ItineraryEditor({
       // just approved here, without re-fetching (see review-draft.ts).
       try {
         window.sessionStorage.setItem(itinerarySnapshotStorageKey(pkg.package_id), JSON.stringify({ title: packageTitle, days }));
+        // The check that cleared this submission, for the review page to send with
+        // the submit request so the admin can see the score and suggestions.
+        const checked = toSubmittedFeasibility(feasResult, lastCheckedAt);
+        if (checked) window.sessionStorage.setItem(feasibilityStorageKey(pkg.package_id), JSON.stringify(checked));
       } catch {
         // best-effort only
       }
@@ -2512,7 +2594,7 @@ export default function ItineraryEditor({
               <div className="day-photo-single">
                 {photos.map((photo) => <figure key={photo.src}>
                   <img src={toSafeImageSrc(photo.src)} alt={photo.alt} />
-                  <button type="button" className="remove-photo-btn" aria-label="Remove photo" onClick={() => { void removeDayPhoto(photo); }}><Icon name="plus" size={10} /></button>
+                  <button type="button" className="remove-photo-btn" aria-label={`Remove ${photo.alt}`} onClick={() => { void trackUpload(removeDayPhoto(photo)); }}><Icon name="plus" size={10} /></button>
                   <label className="change-photo-btn" aria-label={`Change ${photo.alt}`}>
                     <input type="file" accept="image/png,image/jpeg" onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ""; if (!file) return; void trackUpload(changeDayPhoto(photo, file)); }} />
                     Change photo
@@ -2554,7 +2636,7 @@ export default function ItineraryEditor({
                 const hasHotelDetails = item.type === "HOTEL" && (Boolean(hotel) || Boolean(item.roomType));
                 const isFixedActivity = item.type === "ACTIVITY";
                 const scheduleConflict = REAL_TIME_PATTERN.test(item.time)
-                  ? findTimeConflict(items, item.id, item.time, item.duration ?? "0")
+                  ? findTimeConflict(items, item.id, item.time, item.duration ?? "0", overnightArrivalId)
                   : null;
                 const nights = hotel ? hotelNights(hotel) : null;
                 // Only the check-in row speaks for the whole stay; the night
@@ -2628,6 +2710,7 @@ export default function ItineraryEditor({
                   ? `$${flight.price_aud.toLocaleString("en-AU")}`
                   : hotelTotal;
                 const isTimeValue = /^\d{1,2}:\d{2}/.test(item.time);
+                const flightTimes = item.type === "FLIGHT" ? flightCardTimes(item, landing?.overnight === true && landing.flight.id === item.id) : null;
                 const displayedPrice = referenceFlight?.price ?? itemPrice;
                 const isPriceValue = displayedPrice.startsWith("$");
                 const stayMarkerLabel = item.stayMarker === "check-in"
@@ -2646,8 +2729,8 @@ export default function ItineraryEditor({
                 <article className={`timeline-item ${scheduleConflict ? "critical" : item.status} ${draggedItemId === item.id ? "dragging" : ""} ${canExpand ? "editable" : ""} ${isExpanded ? "expanded" : ""}`} onClick={(event) => { if (!canExpand || (event.target as HTMLElement).closest("button")) return; toggleExpand(); }} onKeyDown={(event) => { if (!canExpand || (event.target as HTMLElement).closest("button")) return; if (event.key === "Enter" || event.key === " ") { event.preventDefault(); toggleExpand(); } }} tabIndex={canExpand ? 0 : undefined} role={canExpand ? "button" : undefined} aria-expanded={canExpand ? isExpanded : undefined}>
                   <button className="drag-handle" draggable aria-label={`Move ${hotelTitle}. Use drag and drop, or the up and down arrow keys.`} onDragStart={(event) => { setEditingItem(null); setDraggedItemId(item.id); event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/plain", String(item.id)); }} onDragEnd={endDrag} onKeyDown={(event) => { if (event.key === "ArrowUp") { event.preventDefault(); moveItem(index, index - 1); } if (event.key === "ArrowDown") { event.preventDefault(); moveItem(index, index + 1); } }}><span /><span /><span /><span /><span /><span /></button>
                   <div className="item-time">
-                    <div className="item-time-row"><Icon name={item.icon} /><strong className={isTimeValue ? undefined : "item-time-word"}>{item.type === "FLIGHT" && item.arrivalTime ? item.arrivalTime : item.time}</strong></div>
-                    {isTimeValue && item.type === "FLIGHT" && item.arrivalTime && <span className="item-time-end">from {item.time}</span>}
+                    <div className="item-time-row"><Icon name={item.icon} /><strong className={isTimeValue ? undefined : "item-time-word"}>{flightTimes?.main ?? item.time}</strong></div>
+                    {isTimeValue && flightTimes?.sub && <span className="item-time-end">{flightTimes.sub}</span>}
                     {isTimeValue && item.type !== "FLIGHT" && item.duration && <span className="item-time-end">to {getEndTime(item.time, item.duration)}</span>}
                   </div>
                   <div className="item-copy">
@@ -2828,7 +2911,8 @@ export default function ItineraryEditor({
                 <div className={`feas-score-display${!feasResult || resultStale ? " feas-score-display-stale" : scorePassing ? " feas-score-display-pass" : ""}`}>
                   <strong>{displayScore !== undefined ? displayScore : "—"}</strong><span>/100</span>
                 </div>
-                {scoreWithheld && !resultStale && <p className="feas-score-hint">Fix the critical issues to see your score.</p>}
+                {criticalOpen && !resultStale && <p className="feas-score-hint">Fix the critical issues to see your score.</p>}
+                {criticalFixedLive && <p className="feas-score-hint" role="status">Critical issues fixed. Re-check to confirm and see your score.</p>}
                 <div className={`score-track${resultStale ? " score-track-stale" : scorePassing ? " score-track-pass" : ""}`} role="meter" aria-label={displayScore !== undefined ? `Package quality score, ${displayScore} out of 100${resultStale ? " (stale — content changed since this was calculated)" : ""}. Minimum score to submit is 70.` : scoreWithheld ? "Package quality score not shown until the critical issues are fixed. Minimum score to submit is 70." : "Package quality score not yet checked. Minimum score to submit is 70."} aria-valuemin={0} aria-valuemax={100} aria-valuenow={displayScore ?? 0}>
                   <span className="score-fill" style={{ width: displayScore !== undefined ? `${Math.min(100, Math.max(0, displayScore))}%` : "0%" }} />
                   <i aria-hidden="true" />
@@ -2879,7 +2963,7 @@ export default function ItineraryEditor({
               {passedChecklist.filter((c) => c.passed).map((c) => <li key={c.label}><Icon name="check" size={15} />{c.label}</li>)}
               {passedChecklist.every((c) => !c.passed) && <p style={{ padding: "8px", fontSize: "0.85rem" }}>No checks passed yet.</p>}
             </ul>}
-            <p className="quality-footer">Last update: {feasResult && lastCheckedAt ? formatRelativeTime(lastCheckedAt) : "Not yet checked"}</p>
+            <p className="quality-footer">Last update: {feasResult && lastCheckedAt ? formatRelativeTime(lastCheckedAt) : "Not yet checked"}{feasResult && resultStale ? " · Fixes show live; Re-check runs the full check." : ""}</p>
           </section>
           <Panel title="Trip details" className="trip-params-panel">
             <div className="trip-params-rows">
@@ -2935,7 +3019,7 @@ export default function ItineraryEditor({
             {editingTripParams
               ? <div className="trip-params-actions">
                   <button type="button" className="quiet-button" onClick={() => setEditingTripParams(false)}>Cancel</button>
-                  <button type="button" className="publish-button" onClick={saveTripParams}>Save</button>
+                  <button type="button" className="publish-button" disabled={savingTripParams} onClick={saveTripParams}>{savingTripParams ? "Saving…" : "Save"}</button>
                 </div>
               : <button type="button" className="trip-params-edit-button" disabled={isLocked} onClick={startEditingTripParams}><Icon name="pencil" size={14} />Edit trip details</button>}
           </Panel>

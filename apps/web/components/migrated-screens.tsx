@@ -29,8 +29,7 @@ import {
   itineraryToPackageInput,
   type WizardSelection,
 } from "../lib/ai/itinerary";
-import { wizardVibesStorageKey } from "../lib/review-draft";
-import { VIBES } from "../lib/vibes";
+import { normalizeSeason, vibeIdsFromLabels, VIBES } from "../lib/vibes";
 import { supabase } from "../lib/supabase/client";
 import { creatorPackageRoute, creatorPackageShareRoute } from "../lib/routes";
 import { hasAdminApprovalAccess } from "../lib/admin-api";
@@ -48,17 +47,6 @@ export function nextRecommendationInfoOpen(
 ) {
   return interaction === "leave" ? false : open || interaction === "focus" || interaction === "click";
 }
-
-// ─── Image URLs ────────────────────────────────────────────────────────────────
-const IMG = {
-  hero:      "https://images.unsplash.com/photo-1510391532992-e1b94a277a3a?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&q=80&w=1400",
-  tokyo:     "https://images.unsplash.com/photo-1573455494060-c5595004fb6c?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&q=80&w=800",
-  iceland:   "https://images.unsplash.com/photo-1488415032361-b7e238421f1b?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&q=80&w=800",
-  bali:      "https://images.unsplash.com/photo-1711609110590-5ad5c4599e56?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&q=80&w=800",
-  morocco:   "https://images.unsplash.com/photo-1489749798305-4fea3ae63d43?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&q=80&w=800",
-  santorini: "https://images.unsplash.com/photo-1560703650-ef3e0f254ae0?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&q=80&w=800",
-  maldives:  "https://images.unsplash.com/photo-1514282401047-d79a71a590e8?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&q=80&w=800",
-};
 
 // ─── DS Tokens (mirrors CSS custom properties) ─────────────────────────────────
 const C = {
@@ -171,7 +159,7 @@ function BtnSecondary({
 }
 
 // Brand wordmark: Travel Marketplace® and tagline
-function MarketplaceBrandLogo() {
+export function MarketplaceBrandLogo() {
   return (
     <div style={{ display: "flex", flexDirection: "column", justifyContent: "center", gap: 2 }}>
       <div style={{
@@ -500,11 +488,12 @@ export function LoginScreen({ onNav }: { onNav: (s: Screen) => void }) {
         {/* Email field — floating label style */}
         <form onSubmit={handleSubmit} style={{ display: "flex", flexDirection: "column", gap: 12 }}>
           <div style={{ position: "relative" }}>
-            <label style={{
+            <label htmlFor="login-email" style={{
               position: "absolute", top: -9, left: 12, background: C.white,
               padding: "0 4px", fontSize: 12, color: C.secondary, lineHeight: 1,
             }}>Email address *</label>
             <input
+              id="login-email"
               type="email" value={email}
               onChange={(e) => setEmail(e.target.value)}
               autoComplete="email"
@@ -931,14 +920,26 @@ export function MarketplaceScreen() {
                 cursor: "pointer",
               }}
             >
-              {/* Image */}
-              <div style={{ position: "relative", aspectRatio: "3/2", overflow: "hidden" }}>
-                <img className="trip-card-img" src={card.cover_image_url || IMG.hero} alt={card.title} style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />
+              {/* Image — photo-less packages get a quiet placeholder instead of
+                  the shared stock photo (which made every such card identical). */}
+              <div style={{ position: "relative", aspectRatio: "3/2", overflow: "hidden", background: C.subtle }}>
+                {card.cover_image_url ? (
+                  <img className="trip-card-img" src={card.cover_image_url} alt={card.title} style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />
+                ) : (
+                  <div aria-hidden="true" style={{ position: "absolute", inset: 0, display: "grid", placeItems: "center", color: C.secondary }}>
+                    <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                      <rect x="3" y="4" width="18" height="16" rx="2" />
+                      <circle cx="9" cy="10" r="2" />
+                      <path d="m3 17 5-4 4 3 4-3 5 4" />
+                    </svg>
+                  </div>
+                )}
                 {card.tags.length > 0 && (
                   <div style={{ position: "absolute", left: 12, bottom: 12, display: "flex", gap: 6, flexWrap: "wrap" }}>
                     {card.tags.slice(0, 3).map((tag) => (
                       <span key={tag} style={{
                         background: "rgba(255,255,255,0.94)", color: C.ink,
+                        border: `1px solid ${C.border}`,
                         fontFamily: "var(--fc-font-body)", fontSize: 12, fontWeight: 600,
                         lineHeight: "16px", padding: "4px 10px", borderRadius: C.radiusPill,
                       }}>{tag}</span>
@@ -1125,6 +1126,7 @@ export function MarketplaceScreen() {
 export const CREATOR_DASHBOARD_TABS = [
   "All",
   "Approved",
+  "Live",
   "Under review",
   "Rejected",
   "Drafts",
@@ -2493,9 +2495,9 @@ export function AIWizardScreen({ onNav, initialStep = 0, requestedStep, stepRequ
             customDurationDays,
             season: season ?? "",
           }),
-          // Persist the raw vibe ids — tags is the only backend field that
-          // carries them (see lib/vibes.ts for the canonical list).
-          tags: vibes,
+          // Dedicated columns, validated by the API (see lib/vibes.ts).
+          vibes: vibeIdsFromLabels(vibes),
+          season: normalizeSeason(season),
         };
         const { package_id } = await createPackage(
           timeoutFetch,
@@ -2509,20 +2511,6 @@ export function AIWizardScreen({ onNav, initialStep = 0, requestedStep, stepRequ
         if (inFlightSetupRef.current === runSetup) {
           setCreatedPackageId(package_id);
           setGenerationComplete(true);
-        }
-        // Vibes/season have no backend field to persist to (not even proposed
-        // in the save/submit handover) — stashed here so the Finalise & Review
-        // page can still show them once, right after creation.
-        try {
-          window.sessionStorage.setItem(
-            wizardVibesStorageKey(package_id),
-            JSON.stringify({
-              vibes: vibes.map((vibeId) => VIBES.find((item) => item.id === vibeId)?.label ?? vibeId),
-              season,
-            }),
-          );
-        } catch {
-          // best-effort only
         }
       } catch (error) {
         if (inFlightSetupRef.current === runSetup) inFlightSetupRef.current = null;
@@ -2607,7 +2595,12 @@ export function AIWizardScreen({ onNav, initialStep = 0, requestedStep, stepRequ
         season: seasonOverride ?? "",
       });
       const description = `${styleLabels.length ? `A ${styleLabels.join(", ")} trip` : "A custom trip"}${seasonOverride ? `, built for ${seasonOverride}` : ", built from scratch"}.`;
-      const { package_id } = await createPackage(fetch, BUILDER_API_URL, accessToken, { ...base, description, tags: vibes });
+      const { package_id } = await createPackage(fetch, BUILDER_API_URL, accessToken, {
+        ...base,
+        description,
+        vibes: vibeIdsFromLabels(vibes),
+        season: normalizeSeason(seasonOverride),
+      });
       router.push(`/packages/editor/${encodeURIComponent(package_id)}`);
     } catch (error) {
       setCreateError(error instanceof Error ? error.message : "Unable to create this package.");
